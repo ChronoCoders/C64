@@ -97,10 +97,11 @@ static unsigned g_failed_count;
 // Reason the run loop stops.
 typedef enum {
     STOP_NONE,
-    STOP_END_MARKER,   // reached "trap17"
-    STOP_RESET,        // reached a reset/quit vector
-    STOP_STUB,         // CPU core did not advance (Phase 0)
-    STOP_LOAD_FAILED,  // next test file could not be opened
+    STOP_END_MARKER,    // reached "trap17"
+    STOP_RESET,         // reached a reset/quit vector
+    STOP_NO_PROGRESS,   // instruction left PC unchanged (self-loop halt)
+    STOP_UNIMPL,        // core halted on an unimplemented opcode
+    STOP_LOAD_FAILED,   // next test file could not be opened
 } StopReason;
 
 // ---- Memory setup --------------------------------------------------------
@@ -273,14 +274,14 @@ static bool is_trap(uint16_t pc) {
 }
 
 // Drive the CPU, dispatching traps at instruction boundaries.
-// invariant: instruction-boundary trap dispatch is written against the Phase 1
-// model. Until the cycle-accurate core lands, cpu_tick is a stub and PC never
-// leaves the entry point, so the loop detects the lack of progress and stops.
-// This is expected and correct for Phase 0.
+// invariant: a trap is dispatched only at an instruction boundary, i.e. when
+// cpu.cycle == 0. The step loop always completes a full instruction, leaving
+// cpu.cycle == 0, and the initial state is a boundary, so the boundary guard
+// holds every iteration. A trap is never dispatched mid-instruction.
 static StopReason run(void) {
     for (;;) {
         uint16_t pc = cpu.pc;
-        if (is_trap(pc)) {
+        if (cpu.cycle == 0 && is_trap(pc)) {
             switch (pc) {
                 case TRAP_CHROUT: trap_chrout(); break;
                 case TRAP_GETIN: trap_getin(); break;
@@ -301,10 +302,13 @@ static StopReason run(void) {
             continue;
         }
         step_instruction();
+        if (cpu_halted()) {
+            return STOP_UNIMPL;
+        }
         if (cpu.pc == pc) {
-            // No forward progress: either the Phase 0 stub, or a real self-loop
-            // halt in Phase 1. Either way the run cannot continue here.
-            return STOP_STUB;
+            // A full instruction left PC unchanged: a branch/jump to self, the
+            // tight loop Lorenz tests use to halt. The run cannot continue here.
+            return STOP_NO_PROGRESS;
         }
     }
 }
@@ -322,10 +326,13 @@ static void report(StopReason reason) {
         case STOP_LOAD_FAILED:
             printf("Run stopped: could not open next test file.\n");
             break;
-        case STOP_STUB:
-            printf("Run stopped: CPU core did not advance.\n");
-            printf("Phase 0: cpu_tick is a stub; no instructions execute yet. "
-                   "This is expected until the Phase 1 core lands.\n");
+        case STOP_UNIMPL:
+            printf("Run stopped: unimplemented opcode $%02X at $%04X.\n",
+                   cpu_halt_opcode(), (unsigned)(cpu.pc - 1));
+            break;
+        case STOP_NO_PROGRESS:
+            printf("Run stopped: instruction left PC unchanged (self-loop "
+                   "halt) at $%04X.\n", (unsigned)cpu.pc);
             break;
         case STOP_NONE:
             break;

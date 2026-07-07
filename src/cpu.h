@@ -1,7 +1,8 @@
-//! 6510 CPU state and lifecycle. No opcode logic this phase.
+//! 6510 CPU state and cycle-accurate execution core.
 #ifndef CPU_H
 #define CPU_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef struct {
@@ -23,6 +24,11 @@ extern CPU cpu;  // single global instance
 
 void cpu_init(void);
 void cpu_reset(void);
-void cpu_tick(void);  // advance exactly one phi2 cycle
+void cpu_tick(void);  // advance exactly one phi2 cycle, at most one bus access
+
+// The core halts cleanly when it fetches an unimplemented opcode, so the driver
+// can report which opcode is missing instead of executing garbage.
+bool cpu_halted(void);
+uint8_t cpu_halt_opcode(void);
 
 #endif // CPU_H
