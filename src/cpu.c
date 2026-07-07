@@ -545,6 +545,222 @@ static void op_cpy_imm(void) { read_imm(cpy_op); }
 static void op_cpy_zp(void) { read_zp(cpy_op); }
 static void op_cpy_abs(void) { read_abs(cpy_op); }
 
+// ---- Read-Modify-Write ----------------------------------------------------
+//
+// The modify callback takes the operand, sets the affected flags, and returns
+// the result. Memory RMW uses the NMOS three-phase pattern: read, write the
+// unmodified value back (dummy write), write the modified value. The modify and
+// flag work happen on the dummy-write cycle. cpu.data carries the operand (and,
+// for abs,X, briefly the page-cross flag) between cycles.
+
+typedef uint8_t (*RmwFn)(uint8_t);
+
+static uint8_t inc_m(uint8_t m) {
+    uint8_t r = (uint8_t)(m + 1);
+    set_nz(r);
+    return r;
+}
+static uint8_t dec_m(uint8_t m) {
+    uint8_t r = (uint8_t)(m - 1);
+    set_nz(r);
+    return r;
+}
+static uint8_t asl_m(uint8_t m) {
+    set_c((m & 0x80) != 0);
+    uint8_t r = (uint8_t)(m << 1);
+    set_nz(r);
+    return r;
+}
+static uint8_t lsr_m(uint8_t m) {
+    set_c((m & 0x01) != 0);
+    uint8_t r = (uint8_t)(m >> 1);
+    set_nz(r);
+    return r;
+}
+static uint8_t rol_m(uint8_t m) {
+    uint8_t cin = (cpu.p & FLAG_C) ? 1 : 0;  // read old C before overwriting
+    set_c((m & 0x80) != 0);
+    uint8_t r = (uint8_t)((m << 1) | cin);
+    set_nz(r);
+    return r;
+}
+static uint8_t ror_m(uint8_t m) {
+    uint8_t cin = (cpu.p & FLAG_C) ? 1 : 0;  // read old C before overwriting
+    set_c((m & 0x01) != 0);
+    uint8_t r = (uint8_t)((m >> 1) | (cin << 7));
+    set_nz(r);
+    return r;
+}
+
+static void rmw_acc(RmwFn f) {
+    // Accumulator mode: 2 cycles, dummy read of the next byte, PC not advanced.
+    bus_read(cpu.pc);
+    cpu.a = f(cpu.a);
+    cpu.cycle = 0;
+}
+
+static void rmw_zp(RmwFn f) {
+    // 5 cycles.
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 3;
+            break;
+        case 3:
+            bus_write(cpu.addr, cpu.data);  // dummy write of unmodified value
+            cpu.data = f(cpu.data);
+            cpu.cycle = 4;
+            break;
+        case 4:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void rmw_zpx(RmwFn f) {
+    // 6 cycles. Effective address wraps within page 0.
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(cpu.addr);  // dummy read from un-indexed address
+            cpu.addr = (uint8_t)(cpu.addr + cpu.x);
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 4;
+            break;
+        case 4:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 5;
+            break;
+        case 5:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void rmw_abs(RmwFn f) {
+    // 6 cycles.
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            cpu.addr = (uint16_t)((bus_read(cpu.pc++) << 8) | (cpu.addr & 0xFF));
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 4;
+            break;
+        case 4:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 5;
+            break;
+        case 5:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void rmw_abx(RmwFn f) {
+    // Always 7 cycles (no page-cross shortcut). cpu.data briefly holds the
+    // page-cross flag, then the operand.
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2: {
+            uint16_t base =
+                (uint16_t)((bus_read(cpu.pc++) << 8) | (cpu.addr & 0xFF));
+            uint16_t eff = (uint16_t)(base + cpu.x);
+            cpu.addr = eff;
+            cpu.data = ((eff ^ base) & 0xFF00) ? 1 : 0;
+            cpu.cycle = 3;
+            break;
+        }
+        case 3:
+            bus_read((uint16_t)(cpu.addr - (cpu.data ? 0x100 : 0)));  // dummy
+            cpu.cycle = 4;
+            break;
+        case 4:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 5;
+            break;
+        case 5:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 6;
+            break;
+        case 6:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+// Implied register increment/decrement: 2 cycles, dummy read, PC not advanced.
+static void reg_incdec(uint8_t *reg, int delta) {
+    bus_read(cpu.pc);
+    *reg = (uint8_t)(*reg + delta);
+    set_nz(*reg);
+    cpu.cycle = 0;
+}
+
+static void op_inc_zp(void) { rmw_zp(inc_m); }
+static void op_inc_zpx(void) { rmw_zpx(inc_m); }
+static void op_inc_abs(void) { rmw_abs(inc_m); }
+static void op_inc_abx(void) { rmw_abx(inc_m); }
+
+static void op_dec_zp(void) { rmw_zp(dec_m); }
+static void op_dec_zpx(void) { rmw_zpx(dec_m); }
+static void op_dec_abs(void) { rmw_abs(dec_m); }
+static void op_dec_abx(void) { rmw_abx(dec_m); }
+
+static void op_asl_acc(void) { rmw_acc(asl_m); }
+static void op_asl_zp(void) { rmw_zp(asl_m); }
+static void op_asl_zpx(void) { rmw_zpx(asl_m); }
+static void op_asl_abs(void) { rmw_abs(asl_m); }
+static void op_asl_abx(void) { rmw_abx(asl_m); }
+
+static void op_lsr_acc(void) { rmw_acc(lsr_m); }
+static void op_lsr_zp(void) { rmw_zp(lsr_m); }
+static void op_lsr_zpx(void) { rmw_zpx(lsr_m); }
+static void op_lsr_abs(void) { rmw_abs(lsr_m); }
+static void op_lsr_abx(void) { rmw_abx(lsr_m); }
+
+static void op_rol_acc(void) { rmw_acc(rol_m); }
+static void op_rol_zp(void) { rmw_zp(rol_m); }
+static void op_rol_zpx(void) { rmw_zpx(rol_m); }
+static void op_rol_abs(void) { rmw_abs(rol_m); }
+static void op_rol_abx(void) { rmw_abx(rol_m); }
+
+static void op_ror_acc(void) { rmw_acc(ror_m); }
+static void op_ror_zp(void) { rmw_zp(ror_m); }
+static void op_ror_zpx(void) { rmw_zpx(ror_m); }
+static void op_ror_abs(void) { rmw_abs(ror_m); }
+static void op_ror_abx(void) { rmw_abx(ror_m); }
+
+static void op_inx(void) { reg_incdec(&cpu.x, 1); }
+static void op_dex(void) { reg_incdec(&cpu.x, -1); }
+static void op_iny(void) { reg_incdec(&cpu.y, 1); }
+static void op_dey(void) { reg_incdec(&cpu.y, -1); }
+
 // ---- NOP / JMP ------------------------------------------------------------
 
 static void op_nop(void) {
@@ -647,6 +863,23 @@ static const OpFn optable[256] = {
 
     [0xE0] = op_cpx_imm,  [0xE4] = op_cpx_zp,   [0xEC] = op_cpx_abs,
     [0xC0] = op_cpy_imm,  [0xC4] = op_cpy_zp,   [0xCC] = op_cpy_abs,
+
+    [0xE6] = op_inc_zp,   [0xF6] = op_inc_zpx,  [0xEE] = op_inc_abs,
+    [0xFE] = op_inc_abx,
+    [0xC6] = op_dec_zp,   [0xD6] = op_dec_zpx,  [0xCE] = op_dec_abs,
+    [0xDE] = op_dec_abx,
+
+    [0x0A] = op_asl_acc,  [0x06] = op_asl_zp,   [0x16] = op_asl_zpx,
+    [0x0E] = op_asl_abs,  [0x1E] = op_asl_abx,
+    [0x4A] = op_lsr_acc,  [0x46] = op_lsr_zp,   [0x56] = op_lsr_zpx,
+    [0x4E] = op_lsr_abs,  [0x5E] = op_lsr_abx,
+    [0x2A] = op_rol_acc,  [0x26] = op_rol_zp,   [0x36] = op_rol_zpx,
+    [0x2E] = op_rol_abs,  [0x3E] = op_rol_abx,
+    [0x6A] = op_ror_acc,  [0x66] = op_ror_zp,   [0x76] = op_ror_zpx,
+    [0x6E] = op_ror_abs,  [0x7E] = op_ror_abx,
+
+    [0xE8] = op_inx,      [0xCA] = op_dex,      [0xC8] = op_iny,
+    [0x88] = op_dey,
 };
 
 static void op_unimpl(void) {
