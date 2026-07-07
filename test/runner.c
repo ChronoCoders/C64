@@ -80,7 +80,6 @@ static const uint8_t IRQ_STUB[] = {
 
 // ---- Runner state --------------------------------------------------------
 
-#define MAX_FAILED 512u
 #define OUTPUT_CAP 4096u
 
 static char g_suite_dir[512] = DEFAULT_SUITE_DIR;
@@ -89,10 +88,7 @@ static char g_current[FNAME_MAX + 1];
 static char g_output[OUTPUT_CAP];
 static size_t g_output_len;
 
-static unsigned g_total;
 static unsigned g_passed;
-static char g_failed[MAX_FAILED][FNAME_MAX + 1];
-static unsigned g_failed_count;
 
 // Reason the run loop stops.
 typedef enum {
@@ -175,18 +171,17 @@ static void output_append(uint8_t petscii) {
     g_output[g_output_len] = '\0';
 }
 
-// Classify the test that just finished (the one named in g_current).
+// A test that reaches the LOAD trap has chained cleanly, which is the Lorenz
+// pass signal: on success a test prints its name and " - OK" and chains to the
+// next; on failure it prints the mismatch and halts without chaining. So the
+// test where the run stops (self-loop, reset, or unimplemented opcode) is the
+// failing or not-yet-supported one, and every test that chained before it
+// passed.
 static void finalize_current(void) {
     if (g_current[0] == '\0' || strcmp(g_current, ENTRY_FILE) == 0) {
         return;  // the loader/banner is not a test
     }
-    g_total++;
-    if (g_output_len == 0) {
-        g_passed++;
-    } else if (g_failed_count < MAX_FAILED) {
-        memcpy(g_failed[g_failed_count], g_current, sizeof(g_current));
-        g_failed_count++;
-    }
+    g_passed++;
 }
 
 // ---- Trap handlers -------------------------------------------------------
@@ -294,7 +289,6 @@ static StopReason run(void) {
                 }
                 case TRAP_RESET:
                 case TRAP_QUIT:
-                    finalize_current();
                     return STOP_RESET;
                 default:
                     break;
@@ -316,34 +310,37 @@ static StopReason run(void) {
 // ---- Reporting -----------------------------------------------------------
 
 static void report(StopReason reason) {
+    printf("Tests passed: %u\n", g_passed);
     switch (reason) {
         case STOP_END_MARKER:
-            printf("Run complete: reached end marker \"%s\".\n", END_MARKER);
-            break;
-        case STOP_RESET:
-            printf("Run stopped: reset/quit vector reached.\n");
-            break;
-        case STOP_LOAD_FAILED:
-            printf("Run stopped: could not open next test file.\n");
+            printf("Run complete: reached end marker \"%s\". All chained tests "
+                   "passed.\n", END_MARKER);
             break;
         case STOP_UNIMPL:
-            printf("Run stopped: unimplemented opcode $%02X at $%04X.\n",
-                   cpu_halt_opcode(), (unsigned)(cpu.pc - 1));
+            printf("Stopped in test \"%s\": unimplemented opcode $%02X at "
+                   "$%04X.\n", g_current, cpu_halt_opcode(),
+                   (unsigned)(cpu.pc - 1));
             break;
         case STOP_NO_PROGRESS:
-            printf("Run stopped: instruction left PC unchanged (self-loop "
-                   "halt) at $%04X.\n", (unsigned)cpu.pc);
+            printf("Stopped in test \"%s\": halted (self-loop) at $%04X.\n",
+                   g_current, (unsigned)cpu.pc);
+            if (g_output_len > 0) {
+                printf("Test output:\n%s\n", g_output);
+            }
+            break;
+        case STOP_RESET:
+            printf("Stopped in test \"%s\": reset/quit vector reached.\n",
+                   g_current);
+            if (g_output_len > 0) {
+                printf("Test output:\n%s\n", g_output);
+            }
+            break;
+        case STOP_LOAD_FAILED:
+            printf("Stopped after \"%s\": could not open next test file.\n",
+                   g_current);
             break;
         case STOP_NONE:
             break;
-    }
-    printf("Tests run: %u  passed: %u  failed: %u\n", g_total, g_passed,
-           g_failed_count);
-    if (g_failed_count > 0) {
-        printf("Failed:\n");
-        for (unsigned i = 0; i < g_failed_count; i++) {
-            printf("  %s\n", g_failed[i]);
-        }
     }
 }
 
