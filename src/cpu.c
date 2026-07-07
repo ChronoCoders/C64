@@ -761,6 +761,60 @@ static void op_dex(void) { reg_incdec(&cpu.x, -1); }
 static void op_iny(void) { reg_incdec(&cpu.y, 1); }
 static void op_dey(void) { reg_incdec(&cpu.y, -1); }
 
+// ---- Branches / flag ops --------------------------------------------------
+//
+// Branch timing: 2 cycles not taken, 3 taken, 4 taken with a page cross. The
+// offset (cpu.data) and the corrected target (cpu.addr) carry between cycles.
+
+static void branch(uint8_t mask, bool when_set) {
+    switch (cpu.cycle) {
+        case 1: {
+            cpu.data = bus_read(cpu.pc++);  // signed offset; PC now past the op
+            bool taken = ((cpu.p & mask) != 0) == when_set;
+            cpu.cycle = taken ? 2 : 0;
+            break;
+        }
+        case 2: {
+            bus_read(cpu.pc);  // dummy fetch at the un-adjusted PC
+            uint16_t target = (uint16_t)(cpu.pc + (int8_t)cpu.data);
+            cpu.addr = target;
+            uint16_t same_page = (uint16_t)((cpu.pc & 0xFF00) | (target & 0xFF));
+            cpu.pc = same_page;
+            cpu.cycle = (same_page == target) ? 0 : 3;
+            break;
+        }
+        case 3:
+            bus_read(cpu.pc);  // dummy fetch at the wrong-page address
+            cpu.pc = cpu.addr;
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_bpl(void) { branch(FLAG_N, false); }
+static void op_bmi(void) { branch(FLAG_N, true); }
+static void op_bvc(void) { branch(FLAG_V, false); }
+static void op_bvs(void) { branch(FLAG_V, true); }
+static void op_bcc(void) { branch(FLAG_C, false); }
+static void op_bcs(void) { branch(FLAG_C, true); }
+static void op_bne(void) { branch(FLAG_Z, false); }
+static void op_beq(void) { branch(FLAG_Z, true); }
+
+// Implied flag set/clear: 2 cycles, dummy read, PC not advanced.
+static void flag_op(uint8_t mask, bool set) {
+    bus_read(cpu.pc);
+    cpu.p = (uint8_t)(set ? (cpu.p | mask) : (cpu.p & ~mask));
+    cpu.cycle = 0;
+}
+
+static void op_clc(void) { flag_op(FLAG_C, false); }
+static void op_sec(void) { flag_op(FLAG_C, true); }
+static void op_cli(void) { flag_op(FLAG_I, false); }
+static void op_sei(void) { flag_op(FLAG_I, true); }
+static void op_cld(void) { flag_op(FLAG_D, false); }
+static void op_sed(void) { flag_op(FLAG_D, true); }
+static void op_clv(void) { flag_op(FLAG_V, false); }
+
 // ---- NOP / JMP ------------------------------------------------------------
 
 static void op_nop(void) {
@@ -880,6 +934,14 @@ static const OpFn optable[256] = {
 
     [0xE8] = op_inx,      [0xCA] = op_dex,      [0xC8] = op_iny,
     [0x88] = op_dey,
+
+    [0x10] = op_bpl,      [0x30] = op_bmi,      [0x50] = op_bvc,
+    [0x70] = op_bvs,      [0x90] = op_bcc,      [0xB0] = op_bcs,
+    [0xD0] = op_bne,      [0xF0] = op_beq,
+
+    [0x18] = op_clc,      [0x38] = op_sec,      [0x58] = op_cli,
+    [0x78] = op_sei,      [0xD8] = op_cld,      [0xF8] = op_sed,
+    [0xB8] = op_clv,
 };
 
 static void op_unimpl(void) {
