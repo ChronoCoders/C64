@@ -1,0 +1,5 @@
+build/
+rom/*.rom
+*.o
+*.swp
+.DS_Store
