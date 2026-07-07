@@ -815,6 +815,148 @@ static void op_cld(void) { flag_op(FLAG_D, false); }
 static void op_sed(void) { flag_op(FLAG_D, true); }
 static void op_clv(void) { flag_op(FLAG_V, false); }
 
+// ---- Stack / misc ---------------------------------------------------------
+//
+// Stack lives in page 1 at $0100 | SP. Push writes then decrements SP; pull
+// increments SP then reads. cpu.data / cpu.addr carry values between cycles.
+
+#define STACK(sp) ((uint16_t)(0x0100 | (sp)))
+
+static void op_jsr(void) {
+    // 6 cycles. Pushes the address of the last operand byte (return - 1).
+    switch (cpu.cycle) {
+        case 1:
+            cpu.data = bus_read(cpu.pc++);  // target low; PC now at target high
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(STACK(cpu.sp));  // dummy stack read
+            cpu.cycle = 3;
+            break;
+        case 3:
+            bus_write(STACK(cpu.sp), (uint8_t)(cpu.pc >> 8));  // push PCH
+            cpu.sp--;
+            cpu.cycle = 4;
+            break;
+        case 4:
+            bus_write(STACK(cpu.sp), (uint8_t)(cpu.pc & 0xFF));  // push PCL
+            cpu.sp--;
+            cpu.cycle = 5;
+            break;
+        case 5:
+            cpu.pc = (uint16_t)((bus_read(cpu.pc) << 8) | cpu.data);  // target high
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_rts(void) {
+    // 6 cycles. Pulls the stored address and increments it.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);  // dummy read, PC not advanced
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(STACK(cpu.sp));  // dummy stack read
+            cpu.sp++;
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.data = bus_read(STACK(cpu.sp));  // pull PCL
+            cpu.sp++;
+            cpu.cycle = 4;
+            break;
+        case 4:
+            cpu.addr = (uint16_t)((bus_read(STACK(cpu.sp)) << 8) | cpu.data);
+            cpu.cycle = 5;
+            break;
+        case 5:
+            bus_read(cpu.addr);  // dummy read at the pulled address
+            cpu.pc = (uint16_t)(cpu.addr + 1);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_pha(void) {
+    // 3 cycles.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);  // dummy read, PC not advanced
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_write(STACK(cpu.sp), cpu.a);
+            cpu.sp--;
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_php(void) {
+    // 3 cycles. Pushes P with B (0x10) and bit 5 (0x20) set.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_write(STACK(cpu.sp), (uint8_t)(cpu.p | 0x30));
+            cpu.sp--;
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_pla(void) {
+    // 4 cycles.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(STACK(cpu.sp));  // dummy stack read
+            cpu.sp++;
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.a = bus_read(STACK(cpu.sp));
+            set_nz(cpu.a);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+static void op_plp(void) {
+    // 4 cycles. Bit 5 reads back as 1, B (bit 4) is not a physical flag.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(STACK(cpu.sp));  // dummy stack read
+            cpu.sp++;
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.p = (uint8_t)((bus_read(STACK(cpu.sp)) & 0xCF) | 0x20);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+// BIT: Z from (A & M), N and V straight from M's top two bits. A and M unchanged.
+static void bit_op(uint8_t m) {
+    set_z((cpu.a & m) == 0);
+    set_n((m & 0x80) != 0);
+    set_v((m & 0x40) != 0);
+}
+static void op_bit_zp(void) { read_zp(bit_op); }
+static void op_bit_abs(void) { read_abs(bit_op); }
+
 // ---- NOP / JMP ------------------------------------------------------------
 
 static void op_nop(void) {
@@ -942,6 +1084,10 @@ static const OpFn optable[256] = {
     [0x18] = op_clc,      [0x38] = op_sec,      [0x58] = op_cli,
     [0x78] = op_sei,      [0xD8] = op_cld,      [0xF8] = op_sed,
     [0xB8] = op_clv,
+
+    [0x20] = op_jsr,      [0x60] = op_rts,      [0x48] = op_pha,
+    [0x68] = op_pla,      [0x08] = op_php,      [0x28] = op_plp,
+    [0x24] = op_bit_zp,   [0x2C] = op_bit_abs,
 };
 
 static void op_unimpl(void) {
