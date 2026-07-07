@@ -29,16 +29,19 @@ static inline void set_nz(uint8_t v) {
                       (v == 0 ? FLAG_Z : 0));
 }
 
-// ---- LDA ------------------------------------------------------------------
+// ---- Shared load handlers (destination via pointer) -----------------------
+//
+// One handler per addressing mode, reused by LDA/LDX/LDY. Page-cross state (for
+// indexed reads) lives in cpu.data between cycles.
 
-static void op_lda_imm(void) {
+static void load_imm(uint8_t *reg) {
     // 2 cycles.
-    cpu.a = bus_read(cpu.pc++);
-    set_nz(cpu.a);
+    *reg = bus_read(cpu.pc++);
+    set_nz(*reg);
     cpu.cycle = 0;
 }
 
-static void op_lda_zp(void) {
+static void load_zp(uint8_t *reg) {
     // 3 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -46,15 +49,15 @@ static void op_lda_zp(void) {
             cpu.cycle = 2;
             break;
         case 2:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_lda_zpx(void) {
-    // 4 cycles.
+static void load_zp_indexed(uint8_t *reg, uint8_t idx) {
+    // 4 cycles. Effective address wraps within page 0.
     switch (cpu.cycle) {
         case 1:
             cpu.addr = bus_read(cpu.pc++);
@@ -62,18 +65,18 @@ static void op_lda_zpx(void) {
             break;
         case 2:
             bus_read(cpu.addr);  // dummy read from un-indexed address
-            cpu.addr = (uint8_t)(cpu.addr + cpu.x);
+            cpu.addr = (uint8_t)(cpu.addr + idx);
             cpu.cycle = 3;
             break;
         case 3:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_lda_abs(void) {
+static void load_abs(uint8_t *reg) {
     // 4 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -85,16 +88,15 @@ static void op_lda_abs(void) {
             cpu.cycle = 3;
             break;
         case 3:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-// absolute,X and absolute,Y read: 4 cycles, +1 when the effective address
-// crosses a page. cpu.data holds the page-cross flag between cycles 2 and 3.
-static void lda_abs_indexed(uint8_t idx) {
+static void load_abs_indexed(uint8_t *reg, uint8_t idx) {
+    // 4 cycles, +1 when the effective address crosses a page.
     switch (cpu.cycle) {
         case 1:
             cpu.addr = bus_read(cpu.pc++);
@@ -111,8 +113,8 @@ static void lda_abs_indexed(uint8_t idx) {
         }
         case 3:
             if (!cpu.data) {
-                cpu.a = bus_read(cpu.addr);
-                set_nz(cpu.a);
+                *reg = bus_read(cpu.addr);
+                set_nz(*reg);
                 cpu.cycle = 0;
             } else {
                 bus_read((uint16_t)(cpu.addr - 0x100));  // dummy read
@@ -120,17 +122,14 @@ static void lda_abs_indexed(uint8_t idx) {
             }
             break;
         case 4:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_lda_abx(void) { lda_abs_indexed(cpu.x); }
-static void op_lda_aby(void) { lda_abs_indexed(cpu.y); }
-
-static void op_lda_indx(void) {
+static void load_indx(uint8_t *reg) {
     // (indirect,X): 6 cycles. cpu.data holds the zero-page pointer.
     switch (cpu.cycle) {
         case 1:
@@ -152,16 +151,15 @@ static void op_lda_indx(void) {
             cpu.cycle = 5;
             break;
         case 5:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_lda_indy(void) {
-    // (indirect),Y read: 5 cycles, +1 on page cross. cpu.data holds the pointer,
-    // then the page-cross flag once the base address is assembled.
+static void load_indy(uint8_t *reg) {
+    // (indirect),Y read: 5 cycles, +1 on page cross.
     switch (cpu.cycle) {
         case 1:
             cpu.data = bus_read(cpu.pc++);
@@ -182,8 +180,8 @@ static void op_lda_indy(void) {
         }
         case 4:
             if (!cpu.data) {
-                cpu.a = bus_read(cpu.addr);
-                set_nz(cpu.a);
+                *reg = bus_read(cpu.addr);
+                set_nz(*reg);
                 cpu.cycle = 0;
             } else {
                 bus_read((uint16_t)(cpu.addr - 0x100));  // dummy read
@@ -191,16 +189,16 @@ static void op_lda_indy(void) {
             }
             break;
         case 5:
-            cpu.a = bus_read(cpu.addr);
-            set_nz(cpu.a);
+            *reg = bus_read(cpu.addr);
+            set_nz(*reg);
             cpu.cycle = 0;
             break;
     }
 }
 
-// ---- STA ------------------------------------------------------------------
+// ---- Shared store handlers (source value) ---------------------------------
 
-static void op_sta_zp(void) {
+static void store_zp(uint8_t val) {
     // 3 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -208,14 +206,14 @@ static void op_sta_zp(void) {
             cpu.cycle = 2;
             break;
         case 2:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_sta_zpx(void) {
-    // 4 cycles.
+static void store_zp_indexed(uint8_t val, uint8_t idx) {
+    // 4 cycles. Effective address wraps within page 0.
     switch (cpu.cycle) {
         case 1:
             cpu.addr = bus_read(cpu.pc++);
@@ -223,17 +221,17 @@ static void op_sta_zpx(void) {
             break;
         case 2:
             bus_read(cpu.addr);  // dummy read
-            cpu.addr = (uint8_t)(cpu.addr + cpu.x);
+            cpu.addr = (uint8_t)(cpu.addr + idx);
             cpu.cycle = 3;
             break;
         case 3:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_sta_abs(void) {
+static void store_abs(uint8_t val) {
     // 4 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -245,15 +243,14 @@ static void op_sta_abs(void) {
             cpu.cycle = 3;
             break;
         case 3:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
 
-// absolute,X and absolute,Y store: always 5 cycles (a dummy read always
-// precedes the write). cpu.data holds the page-cross carry for the dummy read.
-static void sta_abs_indexed(uint8_t idx) {
+static void store_abs_indexed(uint8_t val, uint8_t idx) {
+    // Always 5 cycles: a dummy read always precedes the write.
     switch (cpu.cycle) {
         case 1:
             cpu.addr = bus_read(cpu.pc++);
@@ -273,16 +270,13 @@ static void sta_abs_indexed(uint8_t idx) {
             cpu.cycle = 4;
             break;
         case 4:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_sta_abx(void) { sta_abs_indexed(cpu.x); }
-static void op_sta_aby(void) { sta_abs_indexed(cpu.y); }
-
-static void op_sta_indx(void) {
+static void store_indx(uint8_t val) {
     // (indirect,X): 6 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -304,13 +298,13 @@ static void op_sta_indx(void) {
             cpu.cycle = 5;
             break;
         case 5:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
 
-static void op_sta_indy(void) {
+static void store_indy(uint8_t val) {
     // (indirect),Y store: always 6 cycles.
     switch (cpu.cycle) {
         case 1:
@@ -335,11 +329,71 @@ static void op_sta_indy(void) {
             cpu.cycle = 5;
             break;
         case 5:
-            bus_write(cpu.addr, cpu.a);
+            bus_write(cpu.addr, val);
             cpu.cycle = 0;
             break;
     }
 }
+
+// Implied register-to-register transfer: 2 cycles, dummy read of the next byte.
+static void transfer(uint8_t *dst, uint8_t src, bool flags) {
+    bus_read(cpu.pc);  // dummy read, PC not advanced
+    *dst = src;
+    if (flags) {
+        set_nz(*dst);
+    }
+    cpu.cycle = 0;
+}
+
+// ---- LDA / LDX / LDY ------------------------------------------------------
+
+static void op_lda_imm(void) { load_imm(&cpu.a); }
+static void op_lda_zp(void) { load_zp(&cpu.a); }
+static void op_lda_zpx(void) { load_zp_indexed(&cpu.a, cpu.x); }
+static void op_lda_abs(void) { load_abs(&cpu.a); }
+static void op_lda_abx(void) { load_abs_indexed(&cpu.a, cpu.x); }
+static void op_lda_aby(void) { load_abs_indexed(&cpu.a, cpu.y); }
+static void op_lda_indx(void) { load_indx(&cpu.a); }
+static void op_lda_indy(void) { load_indy(&cpu.a); }
+
+static void op_ldx_imm(void) { load_imm(&cpu.x); }
+static void op_ldx_zp(void) { load_zp(&cpu.x); }
+static void op_ldx_zpy(void) { load_zp_indexed(&cpu.x, cpu.y); }
+static void op_ldx_abs(void) { load_abs(&cpu.x); }
+static void op_ldx_aby(void) { load_abs_indexed(&cpu.x, cpu.y); }
+
+static void op_ldy_imm(void) { load_imm(&cpu.y); }
+static void op_ldy_zp(void) { load_zp(&cpu.y); }
+static void op_ldy_zpx(void) { load_zp_indexed(&cpu.y, cpu.x); }
+static void op_ldy_abs(void) { load_abs(&cpu.y); }
+static void op_ldy_abx(void) { load_abs_indexed(&cpu.y, cpu.x); }
+
+// ---- STA / STX / STY ------------------------------------------------------
+
+static void op_sta_zp(void) { store_zp(cpu.a); }
+static void op_sta_zpx(void) { store_zp_indexed(cpu.a, cpu.x); }
+static void op_sta_abs(void) { store_abs(cpu.a); }
+static void op_sta_abx(void) { store_abs_indexed(cpu.a, cpu.x); }
+static void op_sta_aby(void) { store_abs_indexed(cpu.a, cpu.y); }
+static void op_sta_indx(void) { store_indx(cpu.a); }
+static void op_sta_indy(void) { store_indy(cpu.a); }
+
+static void op_stx_zp(void) { store_zp(cpu.x); }
+static void op_stx_zpy(void) { store_zp_indexed(cpu.x, cpu.y); }
+static void op_stx_abs(void) { store_abs(cpu.x); }
+
+static void op_sty_zp(void) { store_zp(cpu.y); }
+static void op_sty_zpx(void) { store_zp_indexed(cpu.y, cpu.x); }
+static void op_sty_abs(void) { store_abs(cpu.y); }
+
+// ---- Transfers ------------------------------------------------------------
+
+static void op_tax(void) { transfer(&cpu.x, cpu.a, true); }
+static void op_tay(void) { transfer(&cpu.y, cpu.a, true); }
+static void op_txa(void) { transfer(&cpu.a, cpu.x, true); }
+static void op_tya(void) { transfer(&cpu.a, cpu.y, true); }
+static void op_tsx(void) { transfer(&cpu.x, cpu.sp, true); }
+static void op_txs(void) { transfer(&cpu.sp, cpu.x, false); }
 
 // ---- NOP / JMP ------------------------------------------------------------
 
@@ -395,13 +449,27 @@ typedef void (*OpFn)(void);
 
 static const OpFn optable[256] = {
     [0xEA] = op_nop,
+    [0x4C] = op_jmp_abs,  [0x6C] = op_jmp_ind,
+
     [0xA9] = op_lda_imm,  [0xA5] = op_lda_zp,   [0xB5] = op_lda_zpx,
     [0xAD] = op_lda_abs,  [0xBD] = op_lda_abx,  [0xB9] = op_lda_aby,
     [0xA1] = op_lda_indx, [0xB1] = op_lda_indy,
+
+    [0xA2] = op_ldx_imm,  [0xA6] = op_ldx_zp,   [0xB6] = op_ldx_zpy,
+    [0xAE] = op_ldx_abs,  [0xBE] = op_ldx_aby,
+
+    [0xA0] = op_ldy_imm,  [0xA4] = op_ldy_zp,   [0xB4] = op_ldy_zpx,
+    [0xAC] = op_ldy_abs,  [0xBC] = op_ldy_abx,
+
     [0x85] = op_sta_zp,   [0x95] = op_sta_zpx,  [0x8D] = op_sta_abs,
     [0x9D] = op_sta_abx,  [0x99] = op_sta_aby,  [0x81] = op_sta_indx,
     [0x91] = op_sta_indy,
-    [0x4C] = op_jmp_abs,  [0x6C] = op_jmp_ind,
+
+    [0x86] = op_stx_zp,   [0x96] = op_stx_zpy,  [0x8E] = op_stx_abs,
+    [0x84] = op_sty_zp,   [0x94] = op_sty_zpx,  [0x8C] = op_sty_abs,
+
+    [0xAA] = op_tax,      [0xA8] = op_tay,      [0x8A] = op_txa,
+    [0x98] = op_tya,      [0xBA] = op_tsx,      [0x9A] = op_txs,
 };
 
 static void op_unimpl(void) {
