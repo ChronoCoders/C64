@@ -19,6 +19,13 @@ CPU cpu;
 static bool halted;
 static uint8_t halt_opcode;
 
+// Interrupt sequencer state. One BRK/IRQ/NMI sequence runs at a time.
+static bool in_interrupt;
+static uint16_t int_vector;
+static bool int_b;         // B bit in pushed P: set for BRK, clear for IRQ/NMI
+static bool intr_latched;  // interrupt decision, latched at the penultimate cycle
+static bool intr_is_nmi;
+
 // Cycle-accurate model: cpu_tick advances exactly one phi2 cycle and performs
 // at most one bus access. cpu.cycle is the cycle index within the executing
 // instruction; cycle 0 is the opcode fetch, and each opcode handler returns
@@ -957,6 +964,142 @@ static void bit_op(uint8_t m) {
 static void op_bit_zp(void) { read_zp(bit_op); }
 static void op_bit_abs(void) { read_abs(bit_op); }
 
+// ---- Interrupts: BRK / RTI / IRQ / NMI ------------------------------------
+//
+// BRK, IRQ, and NMI share one 7-cycle push sequence: push PCH, PCL, then P,
+// fetch the vector low then high, and set I after P is pushed. They differ only
+// in the B bit of the pushed status and in the vector. int_push_vector is that
+// shared machinery (cycles 2-6); BRK and the hardware front-end set int_vector
+// and int_b, then defer to it. Hijacking (an NMI edge redirecting a BRK/IRQ
+// vector fetch) is a cycle-exact case the Lorenz suite does not exercise and is
+// not modelled here.
+
+static void int_push_vector(void) {
+    switch (cpu.cycle) {
+        case 2:
+            bus_write(STACK(cpu.sp), (uint8_t)(cpu.pc >> 8));  // push PCH
+            cpu.sp--;
+            cpu.cycle = 3;
+            break;
+        case 3:
+            bus_write(STACK(cpu.sp), (uint8_t)(cpu.pc & 0xFF));  // push PCL
+            cpu.sp--;
+            cpu.cycle = 4;
+            break;
+        case 4:
+            // Pushed P: bit5 set, B per source, other flags live.
+            bus_write(STACK(cpu.sp),
+                      (uint8_t)((cpu.p & 0xCF) | 0x20 | (int_b ? 0x10 : 0)));
+            cpu.sp--;
+            cpu.cycle = 5;
+            break;
+        case 5:
+            cpu.data = bus_read(int_vector);  // vector low
+            cpu.p |= FLAG_I;                  // set I after P was pushed
+            cpu.cycle = 6;
+            break;
+        case 6:
+            cpu.pc = (uint16_t)((bus_read((uint16_t)(int_vector + 1)) << 8) |
+                                cpu.data);  // vector high
+            cpu.cycle = 0;
+            in_interrupt = false;
+            break;
+    }
+}
+
+static void op_brk(void) {
+    // 7 cycles. 2-byte instruction: the byte after the opcode is read and
+    // discarded (PC ends at opcode+2), and P is pushed with B set.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc++);  // padding byte, discarded
+            int_vector = 0xFFFE;
+            int_b = true;
+            cpu.cycle = 2;
+            break;
+        default:
+            int_push_vector();
+            break;
+    }
+}
+
+static void op_rti(void) {
+    // 6 cycles. Pulls P, then PCL, then PCH; does NOT increment the pulled PC.
+    switch (cpu.cycle) {
+        case 1:
+            bus_read(cpu.pc);  // dummy read, PC not advanced
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(STACK(cpu.sp));  // dummy stack read
+            cpu.sp++;
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.p = (uint8_t)((bus_read(STACK(cpu.sp)) & 0xCF) | 0x20);  // pull P
+            cpu.sp++;
+            cpu.cycle = 4;
+            break;
+        case 4:
+            cpu.data = bus_read(STACK(cpu.sp));  // pull PCL
+            cpu.sp++;
+            cpu.cycle = 5;
+            break;
+        case 5:
+            cpu.pc = (uint16_t)((bus_read(STACK(cpu.sp)) << 8) | cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+// Hardware interrupt front-end: two dummy reads at PC (no PC increment), then
+// the shared push sequence. Entered at an instruction boundary in place of an
+// opcode fetch. The first dummy read runs here; int_handler runs the rest.
+static void begin_interrupt(bool nmi) {
+    in_interrupt = true;
+    int_b = false;  // hardware interrupts push B clear
+    int_vector = nmi ? 0xFFFA : 0xFFFE;
+    if (nmi) {
+        cpu.nmi_pending = 0;  // edge serviced
+    }
+    bus_read(cpu.pc);  // first dummy read
+    cpu.cycle = 1;
+}
+
+static void int_handler(void) {
+    if (cpu.cycle == 1) {
+        bus_read(cpu.pc);  // second dummy read
+        cpu.cycle = 2;
+    } else {
+        int_push_vector();
+    }
+}
+
+// NMI edge detection, run every cycle. bus_nmi is active-low; a high-to-low
+// transition latches a pending NMI that is serviced exactly once.
+static void poll_nmi_edge(void) {
+    if (cpu.nmi_last == 1 && bus_nmi == 0) {
+        cpu.nmi_pending = 1;
+    }
+    cpu.nmi_last = bus_nmi;
+}
+
+// Interrupt recognition: NMI (edge, unmaskable) wins over IRQ (level, masked by
+// I). Sampled before each mid-instruction cycle; the last sample before a
+// boundary is the penultimate-cycle state, which gives the CLI/SEI/PLP
+// one-instruction I-flag delay and RTI's immediacy for free.
+static bool poll_interrupt(void) {
+    if (cpu.nmi_pending) {
+        intr_is_nmi = true;
+        return true;
+    }
+    if (bus_irq == 0 && !(cpu.p & FLAG_I)) {
+        intr_is_nmi = false;
+        return true;
+    }
+    return false;
+}
+
 // ---- NOP / JMP ------------------------------------------------------------
 
 static void op_nop(void) {
@@ -1088,6 +1231,8 @@ static const OpFn optable[256] = {
     [0x20] = op_jsr,      [0x60] = op_rts,      [0x48] = op_pha,
     [0x68] = op_pla,      [0x08] = op_php,      [0x28] = op_plp,
     [0x24] = op_bit_zp,   [0x2C] = op_bit_abs,
+
+    [0x00] = op_brk,      [0x40] = op_rti,
 };
 
 static void op_unimpl(void) {
@@ -1100,8 +1245,11 @@ static void op_unimpl(void) {
 
 void cpu_init(void) {
     memset(&cpu, 0, sizeof(cpu));
+    cpu.nmi_last = 1;  // NMI line idle high
     halted = false;
     halt_opcode = 0;
+    in_interrupt = false;
+    intr_latched = false;
 }
 
 void cpu_reset(void) {
@@ -1111,18 +1259,40 @@ void cpu_reset(void) {
     cpu.sp = 0xFD;
     cpu.p |= FLAG_I;
     cpu.cycle = 0;
+    cpu.nmi_last = 1;
     halted = false;
+    in_interrupt = false;
+    intr_latched = false;
 }
 
 void cpu_tick(void) {
     if (halted) {
         return;
     }
+    poll_nmi_edge();  // sample the NMI line every cycle
+
     if (cpu.cycle == 0) {
+        // Instruction boundary: act on the interrupt decision latched during the
+        // previous instruction's penultimate cycle, else fetch the next opcode.
+        if (intr_latched) {
+            intr_latched = false;
+            begin_interrupt(intr_is_nmi);
+            return;
+        }
         cpu.opcode = bus_read(cpu.pc++);
         cpu.cycle = 1;
         return;
     }
+
+    if (in_interrupt) {
+        int_handler();  // the interrupt sequence itself never polls
+        return;
+    }
+
+    // Poll before executing this cycle; the last poll before the boundary is the
+    // penultimate-cycle sample the hardware acts on.
+    intr_latched = poll_interrupt();
+
     OpFn fn = optable[cpu.opcode];
     if (fn == NULL) {
         op_unimpl();
