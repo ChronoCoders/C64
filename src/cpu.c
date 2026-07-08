@@ -1341,6 +1341,83 @@ static void op_nop_zpx(void) { read_zp_indexed(nop_read, cpu.x); }
 static void op_nop_abs(void) { read_abs(nop_read); }
 static void op_nop_abx(void) { read_abs_indexed(nop_read, cpu.x); }
 
+// ---- Illegal read / immediate: LAX SAX ANC ALR ARR SBX --------------------
+
+// LAX = LDA + LDX from the same operand.
+static void lax_op(uint8_t m) {
+    cpu.a = m;
+    cpu.x = m;
+    set_nz(m);
+}
+static void op_lax_indx(void) { read_indx(lax_op); }
+static void op_lax_zp(void) { read_zp(lax_op); }
+static void op_lax_abs(void) { read_abs(lax_op); }
+static void op_lax_indy(void) { read_indy(lax_op); }
+static void op_lax_zpy(void) { read_zp_indexed(lax_op, cpu.y); }
+static void op_lax_aby(void) { read_abs_indexed(lax_op, cpu.y); }
+
+// SAX = store A AND X. No flags; plain store (no dummy write).
+static void op_sax_indx(void) { store_indx((uint8_t)(cpu.a & cpu.x)); }
+static void op_sax_zp(void) { store_zp((uint8_t)(cpu.a & cpu.x)); }
+static void op_sax_abs(void) { store_abs((uint8_t)(cpu.a & cpu.x)); }
+static void op_sax_zpy(void) { store_zp_indexed((uint8_t)(cpu.a & cpu.x), cpu.y); }
+
+// ANC = AND, then copy N (bit 7) into C.
+static void anc_op(uint8_t m) {
+    cpu.a &= m;
+    set_nz(cpu.a);
+    set_c((cpu.a & 0x80) != 0);
+}
+static void op_anc(void) { read_imm(anc_op); }
+
+// ALR/ASR = AND, then LSR A.
+static void alr_op(uint8_t m) {
+    uint8_t t = (uint8_t)(cpu.a & m);
+    set_c((t & 0x01) != 0);
+    cpu.a = (uint8_t)(t >> 1);
+    set_nz(cpu.a);
+}
+static void op_alr(void) { read_imm(alr_op); }
+
+// ARR = AND, then a ROR-like rotate with adder-derived C and V. In decimal mode
+// A and C receive BCD fixups while N/Z/V stay as the binary-rotate result.
+static void arr_op(uint8_t m) {
+    unsigned cin = (cpu.p & FLAG_C) ? 1u : 0u;
+    uint8_t t = (uint8_t)(cpu.a & m);
+    uint8_t r = (uint8_t)((t >> 1) | (cin << 7));
+    if (cpu.p & FLAG_D) {
+        set_n(cin != 0);
+        set_z(r == 0);
+        set_v(((t ^ r) & 0x40) != 0);
+        uint8_t a = r;
+        if (((t & 0x0F) + (t & 0x01)) > 0x05) {
+            a = (uint8_t)((a & 0xF0) | ((a + 0x06) & 0x0F));
+        }
+        if (((t & 0xF0) + (t & 0x10)) > 0x50) {
+            a = (uint8_t)(a + 0x60);
+            set_c(true);
+        } else {
+            set_c(false);
+        }
+        cpu.a = a;
+    } else {
+        cpu.a = r;
+        set_nz(r);
+        set_c((r & 0x40) != 0);
+        set_v((((r >> 6) ^ (r >> 5)) & 0x01) != 0);
+    }
+}
+static void op_arr(void) { read_imm(arr_op); }
+
+// SBX/AXS = X = (A AND X) - imm, with a CMP-style carry. Not decimal.
+static void sbx_op(uint8_t m) {
+    uint8_t t = (uint8_t)(cpu.a & cpu.x);
+    set_c(t >= m);
+    cpu.x = (uint8_t)(t - m);
+    set_nz(cpu.x);
+}
+static void op_sbx(void) { read_imm(sbx_op); }
+
 // ---- Dispatch -------------------------------------------------------------
 
 typedef void (*OpFn)(void);
@@ -1458,6 +1535,14 @@ static const OpFn optable[256] = {
     [0xE7] = op_isc_zp,   [0xF7] = op_isc_zpx,  [0xEF] = op_isc_abs,
     [0xFF] = op_isc_abx,  [0xFB] = op_isc_aby,  [0xE3] = op_isc_indx,
     [0xF3] = op_isc_indy,
+
+    // Read / immediate illegals.
+    [0xA3] = op_lax_indx, [0xA7] = op_lax_zp,   [0xAF] = op_lax_abs,
+    [0xB3] = op_lax_indy, [0xB7] = op_lax_zpy,  [0xBF] = op_lax_aby,
+    [0x83] = op_sax_indx, [0x87] = op_sax_zp,   [0x8F] = op_sax_abs,
+    [0x97] = op_sax_zpy,
+    [0x0B] = op_anc,      [0x2B] = op_anc,      [0x4B] = op_alr,
+    [0x6B] = op_arr,      [0xCB] = op_sbx,
 };
 
 static void op_unimpl(void) {
