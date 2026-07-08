@@ -721,6 +721,122 @@ static void rmw_abx(RmwFn f) {
     }
 }
 
+// RMW abs,Y: always 7 cycles. Clone of rmw_abx with the Y index. Used only by
+// the illegal combined-RMW opcodes.
+static void rmw_aby(RmwFn f) {
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2: {
+            uint16_t base =
+                (uint16_t)((bus_read(cpu.pc++) << 8) | (cpu.addr & 0xFF));
+            uint16_t eff = (uint16_t)(base + cpu.y);
+            cpu.addr = eff;
+            cpu.data = ((eff ^ base) & 0xFF00) ? 1 : 0;
+            cpu.cycle = 3;
+            break;
+        }
+        case 3:
+            bus_read((uint16_t)(cpu.addr - (cpu.data ? 0x100 : 0)));  // dummy
+            cpu.cycle = 4;
+            break;
+        case 4:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 5;
+            break;
+        case 5:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 6;
+            break;
+        case 6:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+// RMW (indirect,X): 8 cycles. cpu.data holds the zero-page pointer, then the
+// operand.
+static void rmw_indx(RmwFn f) {
+    switch (cpu.cycle) {
+        case 1:
+            cpu.data = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            bus_read(cpu.data);  // dummy read
+            cpu.data = (uint8_t)(cpu.data + cpu.x);
+            cpu.cycle = 3;
+            break;
+        case 3:
+            cpu.addr = bus_read(cpu.data);
+            cpu.cycle = 4;
+            break;
+        case 4:
+            cpu.addr = (uint16_t)((bus_read((uint8_t)(cpu.data + 1)) << 8) |
+                                  (cpu.addr & 0xFF));
+            cpu.cycle = 5;
+            break;
+        case 5:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 6;
+            break;
+        case 6:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 7;
+            break;
+        case 7:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
+// RMW (indirect),Y: always 8 cycles. cpu.data holds the pointer, then the
+// page-cross flag, then the operand.
+static void rmw_indy(RmwFn f) {
+    switch (cpu.cycle) {
+        case 1:
+            cpu.data = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2:
+            cpu.addr = bus_read(cpu.data);
+            cpu.cycle = 3;
+            break;
+        case 3: {
+            uint16_t hi = bus_read((uint8_t)(cpu.data + 1));
+            uint16_t base = (uint16_t)((hi << 8) | (cpu.addr & 0xFF));
+            uint16_t eff = (uint16_t)(base + cpu.y);
+            cpu.addr = eff;
+            cpu.data = ((eff ^ base) & 0xFF00) ? 1 : 0;
+            cpu.cycle = 4;
+            break;
+        }
+        case 4:
+            bus_read((uint16_t)(cpu.addr - (cpu.data ? 0x100 : 0)));  // dummy
+            cpu.cycle = 5;
+            break;
+        case 5:
+            cpu.data = bus_read(cpu.addr);
+            cpu.cycle = 6;
+            break;
+        case 6:
+            bus_write(cpu.addr, cpu.data);  // dummy write
+            cpu.data = f(cpu.data);
+            cpu.cycle = 7;
+            break;
+        case 7:
+            bus_write(cpu.addr, cpu.data);
+            cpu.cycle = 0;
+            break;
+    }
+}
+
 // Implied register increment/decrement: 2 cycles, dummy read, PC not advanced.
 static void reg_incdec(uint8_t *reg, int delta) {
     bus_read(cpu.pc);
@@ -1148,6 +1264,68 @@ static void op_jmp_ind(void) {
     }
 }
 
+// ---- Illegal combined-RMW: SLO RLA SRE RRA DCP ISC ------------------------
+//
+// Each is a legal RMW on memory combined with an ALU op on A using the modified
+// value. They reuse the RMW helpers and the existing ALU/shift primitives, so
+// both the shift/inc flag and the ALU flags fall out of single-source helpers.
+// For RRA/ISC the ADC/SBC part honours decimal mode; DCP's compare is binary.
+
+static uint8_t slo_m(uint8_t m) { uint8_t r = asl_m(m); ora_op(r); return r; }
+static uint8_t rla_m(uint8_t m) { uint8_t r = rol_m(m); and_op(r); return r; }
+static uint8_t sre_m(uint8_t m) { uint8_t r = lsr_m(m); eor_op(r); return r; }
+static uint8_t rra_m(uint8_t m) { uint8_t r = ror_m(m); adc_op(r); return r; }
+static uint8_t dcp_m(uint8_t m) { uint8_t r = dec_m(m); compare(cpu.a, r); return r; }
+static uint8_t isc_m(uint8_t m) { uint8_t r = inc_m(m); sbc_op(r); return r; }
+
+static void op_slo_zp(void) { rmw_zp(slo_m); }
+static void op_slo_zpx(void) { rmw_zpx(slo_m); }
+static void op_slo_abs(void) { rmw_abs(slo_m); }
+static void op_slo_abx(void) { rmw_abx(slo_m); }
+static void op_slo_aby(void) { rmw_aby(slo_m); }
+static void op_slo_indx(void) { rmw_indx(slo_m); }
+static void op_slo_indy(void) { rmw_indy(slo_m); }
+
+static void op_rla_zp(void) { rmw_zp(rla_m); }
+static void op_rla_zpx(void) { rmw_zpx(rla_m); }
+static void op_rla_abs(void) { rmw_abs(rla_m); }
+static void op_rla_abx(void) { rmw_abx(rla_m); }
+static void op_rla_aby(void) { rmw_aby(rla_m); }
+static void op_rla_indx(void) { rmw_indx(rla_m); }
+static void op_rla_indy(void) { rmw_indy(rla_m); }
+
+static void op_sre_zp(void) { rmw_zp(sre_m); }
+static void op_sre_zpx(void) { rmw_zpx(sre_m); }
+static void op_sre_abs(void) { rmw_abs(sre_m); }
+static void op_sre_abx(void) { rmw_abx(sre_m); }
+static void op_sre_aby(void) { rmw_aby(sre_m); }
+static void op_sre_indx(void) { rmw_indx(sre_m); }
+static void op_sre_indy(void) { rmw_indy(sre_m); }
+
+static void op_rra_zp(void) { rmw_zp(rra_m); }
+static void op_rra_zpx(void) { rmw_zpx(rra_m); }
+static void op_rra_abs(void) { rmw_abs(rra_m); }
+static void op_rra_abx(void) { rmw_abx(rra_m); }
+static void op_rra_aby(void) { rmw_aby(rra_m); }
+static void op_rra_indx(void) { rmw_indx(rra_m); }
+static void op_rra_indy(void) { rmw_indy(rra_m); }
+
+static void op_dcp_zp(void) { rmw_zp(dcp_m); }
+static void op_dcp_zpx(void) { rmw_zpx(dcp_m); }
+static void op_dcp_abs(void) { rmw_abs(dcp_m); }
+static void op_dcp_abx(void) { rmw_abx(dcp_m); }
+static void op_dcp_aby(void) { rmw_aby(dcp_m); }
+static void op_dcp_indx(void) { rmw_indx(dcp_m); }
+static void op_dcp_indy(void) { rmw_indy(dcp_m); }
+
+static void op_isc_zp(void) { rmw_zp(isc_m); }
+static void op_isc_zpx(void) { rmw_zpx(isc_m); }
+static void op_isc_abs(void) { rmw_abs(isc_m); }
+static void op_isc_abx(void) { rmw_abx(isc_m); }
+static void op_isc_aby(void) { rmw_aby(isc_m); }
+static void op_isc_indx(void) { rmw_indx(isc_m); }
+static void op_isc_indy(void) { rmw_indy(isc_m); }
+
 // ---- Illegal opcodes: undocumented NOPs -----------------------------------
 //
 // The multi-byte undocumented NOPs read an operand and discard it; they touch
@@ -1260,6 +1438,26 @@ static const OpFn optable[256] = {
     [0x0C] = op_nop_abs,
     [0x1C] = op_nop_abx,  [0x3C] = op_nop_abx,  [0x5C] = op_nop_abx,
     [0x7C] = op_nop_abx,  [0xDC] = op_nop_abx,  [0xFC] = op_nop_abx,
+
+    // Combined-RMW illegals.
+    [0x07] = op_slo_zp,   [0x17] = op_slo_zpx,  [0x0F] = op_slo_abs,
+    [0x1F] = op_slo_abx,  [0x1B] = op_slo_aby,  [0x03] = op_slo_indx,
+    [0x13] = op_slo_indy,
+    [0x27] = op_rla_zp,   [0x37] = op_rla_zpx,  [0x2F] = op_rla_abs,
+    [0x3F] = op_rla_abx,  [0x3B] = op_rla_aby,  [0x23] = op_rla_indx,
+    [0x33] = op_rla_indy,
+    [0x47] = op_sre_zp,   [0x57] = op_sre_zpx,  [0x4F] = op_sre_abs,
+    [0x5F] = op_sre_abx,  [0x5B] = op_sre_aby,  [0x43] = op_sre_indx,
+    [0x53] = op_sre_indy,
+    [0x67] = op_rra_zp,   [0x77] = op_rra_zpx,  [0x6F] = op_rra_abs,
+    [0x7F] = op_rra_abx,  [0x7B] = op_rra_aby,  [0x63] = op_rra_indx,
+    [0x73] = op_rra_indy,
+    [0xC7] = op_dcp_zp,   [0xD7] = op_dcp_zpx,  [0xCF] = op_dcp_abs,
+    [0xDF] = op_dcp_abx,  [0xDB] = op_dcp_aby,  [0xC3] = op_dcp_indx,
+    [0xD3] = op_dcp_indy,
+    [0xE7] = op_isc_zp,   [0xF7] = op_isc_zpx,  [0xEF] = op_isc_abs,
+    [0xFF] = op_isc_abx,  [0xFB] = op_isc_aby,  [0xE3] = op_isc_indx,
+    [0xF3] = op_isc_indy,
 };
 
 static void op_unimpl(void) {
