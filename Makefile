@@ -15,7 +15,7 @@ SRC = $(wildcard src/*.c)
 BIN = build/c64
 
 # Core objects without main.c, shared by the test runner (two mains would clash).
-CORE_SRC = src/bus.c src/mem.c src/cpu.c
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/vic.c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 

@@ -19,6 +19,7 @@
 
 #include "cpu.h"
 #include "mem.h"
+#include "vic.h"
 
 // ---- Single source of truth: trap addresses ------------------------------
 
@@ -277,7 +278,7 @@ static StopReason trap_load(void) {
 static void step_instruction(void) {
     unsigned n = 0;
     do {
-        cpu_tick();
+        vic_step();  // VIC then CPU, so tests reading $D012 see the live raster
         n++;
     } while (cpu.cycle != 0 && n < INSTR_CYCLE_CAP);
 }
@@ -389,6 +390,7 @@ int main(int argc, char **argv) {
     install_bench();
 
     cpu_init();
+    vic_init();  // the VIC drives the raster the timer tests poll via $D011/$D012
     cpu.sp = START_SP;
     cpu.p = START_P;
     // The Lorenz bench runs in an all-RAM configuration: drive LORAM/HIRAM/CHAREN
