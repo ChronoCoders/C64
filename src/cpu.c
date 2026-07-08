@@ -1148,6 +1148,21 @@ static void op_jmp_ind(void) {
     }
 }
 
+// ---- Illegal opcodes: undocumented NOPs -----------------------------------
+//
+// The multi-byte undocumented NOPs read an operand and discard it; they touch
+// no registers or flags. They reuse the read-operand addressing helpers with a
+// callback that ignores the value. The implied 1-byte forms are handled by the
+// legal op_nop.
+
+static void nop_read(uint8_t m) { (void)m; }
+
+static void op_nop_imm(void) { read_imm(nop_read); }
+static void op_nop_zp(void) { read_zp(nop_read); }
+static void op_nop_zpx(void) { read_zp_indexed(nop_read, cpu.x); }
+static void op_nop_abs(void) { read_abs(nop_read); }
+static void op_nop_abx(void) { read_abs_indexed(nop_read, cpu.x); }
+
 // ---- Dispatch -------------------------------------------------------------
 
 typedef void (*OpFn)(void);
@@ -1233,6 +1248,18 @@ static const OpFn optable[256] = {
     [0x24] = op_bit_zp,   [0x2C] = op_bit_abs,
 
     [0x00] = op_brk,      [0x40] = op_rti,
+
+    // Illegal NOPs. Implied 1-byte forms reuse the legal op_nop.
+    [0x1A] = op_nop,      [0x3A] = op_nop,      [0x5A] = op_nop,
+    [0x7A] = op_nop,      [0xDA] = op_nop,      [0xFA] = op_nop,
+    [0x80] = op_nop_imm,  [0x82] = op_nop_imm,  [0x89] = op_nop_imm,
+    [0xC2] = op_nop_imm,  [0xE2] = op_nop_imm,
+    [0x04] = op_nop_zp,   [0x44] = op_nop_zp,   [0x64] = op_nop_zp,
+    [0x14] = op_nop_zpx,  [0x34] = op_nop_zpx,  [0x54] = op_nop_zpx,
+    [0x74] = op_nop_zpx,  [0xD4] = op_nop_zpx,  [0xF4] = op_nop_zpx,
+    [0x0C] = op_nop_abs,
+    [0x1C] = op_nop_abx,  [0x3C] = op_nop_abx,  [0x5C] = op_nop_abx,
+    [0x7C] = op_nop_abx,  [0xDC] = op_nop_abx,  [0xFC] = op_nop_abx,
 };
 
 static void op_unimpl(void) {
