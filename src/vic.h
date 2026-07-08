@@ -1,11 +1,13 @@
-//! VIC-II raster timing core (Phase 3a). Owns the master clock: the raster line
-//! and cycle-within-line counters, the $D000-$D02E register file, and the live
-//! $D011/$D012 raster semantics. It advances one cycle per phi2 and drives the
-//! CPU (vic_step). No pixels, badlines, sprites, or interrupts yet; those are
-//! Phases 3b-3e. The raster-compare latch is stored but never fires an IRQ.
+//! VIC-II video controller. Owns the master clock: the raster line and
+//! cycle-within-line counters, the $D000-$D02E register file, the live
+//! $D011/$D012 raster semantics, and per-cycle text-mode rendering into the
+//! framebuffer. It advances one cycle per phi2 and drives the CPU (vic_step),
+//! stalling it on badlines (BA/RDY). Sprites and raster interrupts are 3d/3e;
+//! the raster-compare latch is stored but never fires an IRQ yet.
 #ifndef VIC_H
 #define VIC_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // Region timing constants, single source of truth. One row per video standard;
@@ -63,19 +65,18 @@ void vic_color_write(uint16_t addr, uint8_t val);
 // The VIC renders standard 40x25 hires text mode into a plain ARGB8888
 // framebuffer (0xAARRGGBB per pixel). The framebuffer is display-independent
 // memory; the host layer blits it. Dimensions cover the PAL display window plus
-// a border.
+// a border. Pixels are produced per cycle inside vic_tick as the raster sweeps,
+// so by the end of a frame the framebuffer is complete.
 #define VIC_FB_WIDTH 384u
 #define VIC_FB_HEIGHT 272u
-
-// Paint the whole framebuffer from the current VIC registers, screen RAM,
-// Character ROM, and Color RAM.
-// invariant: this is end-of-frame rendering (approach b): it snapshots the
-// current state once per frame. Per-cycle pixel production (needed for mid-frame
-// raster effects, badlines, and sprites) replaces it in 3c-3e.
-void vic_render(void);
 
 const uint32_t *vic_framebuffer(void);  // VIC_FB_WIDTH * VIC_FB_HEIGHT pixels
 uint16_t vic_fb_width(void);
 uint16_t vic_fb_height(void);
+
+// Enable/disable pixel production (default enabled). Headless timing-only runs
+// disable it: badline detection and the BA/RDY CPU stall still run, only the
+// per-cycle pixel/fetch work is skipped.
+void vic_set_render(bool on);
 
 #endif // VIC_H

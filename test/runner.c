@@ -75,9 +75,10 @@ static const uint8_t IRQ_STUB[] = {
 #define ENTRY_FILE " START"  // leading space is part of the name
 #define END_MARKER "TRAP17"
 
-// No 6510 instruction exceeds 7 phi2 cycles; this bounds the per-instruction
-// step loop and, in Phase 0, bounds the stub cpu_tick that never advances.
-#define INSTR_CYCLE_CAP 8u
+// No 6510 instruction exceeds 7 phi2 cycles, but a badline can stall the CPU for
+// up to ~43 cycles mid-instruction (BA/RDY), so an instruction can span that
+// many machine cycles. This bounds the per-instruction step loop generously.
+#define INSTR_CYCLE_CAP 128u
 
 // ---- Runner state --------------------------------------------------------
 
@@ -391,6 +392,7 @@ int main(int argc, char **argv) {
 
     cpu_init();
     vic_init();  // the VIC drives the raster the timer tests poll via $D011/$D012
+    vic_set_render(false);  // headless: skip pixel production, keep badline timing
     cpu.sp = START_SP;
     cpu.p = START_P;
     // The Lorenz bench runs in an all-RAM configuration: drive LORAM/HIRAM/CHAREN

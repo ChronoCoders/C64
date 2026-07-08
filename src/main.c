@@ -48,8 +48,7 @@ static int run_visible(void) {
         return 1;
     }
     while (!host_poll()) {
-        vic_run_frame();
-        vic_render();
+        vic_run_frame();  // per-cycle rendering fills the framebuffer as it runs
         host_present(vic_framebuffer());
     }
     host_shutdown();
@@ -68,7 +67,6 @@ static int run_headless(void) {
             hi = cpu.pc;
         }
     }
-    vic_render();
     printf("C64 headless bring-up:\n");
     printf("  frames run      %u\n", HEADLESS_FRAMES);
     printf("  PC per frame    $%04X-$%04X, final $%04X\n", lo, hi, cpu.pc);
