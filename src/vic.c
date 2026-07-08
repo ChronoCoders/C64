@@ -91,6 +91,25 @@ static bool render_on = true;
 // (it can complete write cycles), then halts until the VIC releases the bus.
 static int stall_grace = STALL_GRACE_CYCLES;
 
+// Interrupt sources: $D019 latch and $D01A enable, bits 0-3. Only the raster
+// source (bit 0) is active now; the sprite-collision (bits 1,2) and light-pen
+// (bit 3) positions exist but are inert until Phase 3d / out of scope.
+#define VIC_IRQ_RASTER 0x01u
+#define VIC_IRQ_SBCOLL 0x02u  // sprite-background collision (3d, inert)
+#define VIC_IRQ_SSCOLL 0x04u  // sprite-sprite collision (3d, inert)
+#define VIC_IRQ_LP 0x08u      // light pen (out of scope, inert)
+static uint8_t irq_latch;   // $D019: sources that have latched
+static uint8_t irq_enable;  // $D01A: sources allowed to pull IRQ low
+
+// A VIC interrupt is asserted when a latched source is also enabled. This is the
+// single point that drives the VIC's contribution to the wired-OR IRQ line.
+static bool vic_irq_pending(void) {
+    return (irq_latch & irq_enable & 0x0F) != 0;
+}
+static void vic_update_irq(void) {
+    bus_irq_set(BUS_IRQ_VIC, vic_irq_pending());
+}
+
 void vic_set_render(bool on) { render_on = on; }
 
 void vic_init(void) {
@@ -115,6 +134,9 @@ void vic_reset(void) {
     den_frame = false;
     stall_grace = STALL_GRACE_CYCLES;
     bus_ba = 1;
+    irq_latch = 0;
+    irq_enable = 0;
+    vic_update_irq();  // release the IRQ line
 }
 
 // Whether the current raster line is a Bad Line (Bauer 3.5): the display is
@@ -176,6 +198,18 @@ void vic_tick(void) {
         den_frame = true;
     }
     bool badline = is_badline(line);
+
+    // Raster-compare interrupt (Bauer 3.12): latched once per frame at the start
+    // of the compare line -- cycle 1 (raster_cycle 0) for every line except
+    // compare line 0, which latches in cycle 2 (raster_cycle 1) because the
+    // counter reaches 0 one cycle later at the frame wrap. Edge, not level.
+    bool raster_hit = (vic.raster_compare == 0)
+                          ? (line == 0 && vic.raster_cycle == 1)
+                          : (line == vic.raster_compare && vic.raster_cycle == 0);
+    if (raster_hit) {
+        irq_latch |= VIC_IRQ_RASTER;
+        vic_update_irq();
+    }
 
     // Bauer 3.7.2: VCBASE resets in raster line 0; cycle 14 reloads VC/VMLI and,
     // on a badline, resets RC and enters display state.
@@ -256,6 +290,11 @@ uint8_t vic_read(uint16_t addr) {
                              ((vic.raster_line & 0x100) ? 0x80 : 0));
         case 0x12:  // raster: low 8 bits of the live raster line
             return (uint8_t)(vic.raster_line & 0xFF);
+        case 0x19:  // interrupt latch: bits 0-3 latch, 4-6 read 1, 7 = IRQ status
+            return (uint8_t)((irq_latch & 0x0F) | 0x70 |
+                             (vic_irq_pending() ? 0x80 : 0));
+        case 0x1A:  // interrupt enable: bits 0-3, high bits read 1
+            return (uint8_t)(irq_enable | 0xF0);
         default:
             // invariant (3b-3e): most registers gain read-side behaviour (e.g.
             // unused high bits reading as 1, latched interrupt flags) when their
@@ -268,6 +307,16 @@ void vic_write(uint16_t addr, uint8_t val) {
     uint8_t r = (uint8_t)(addr & 0x3F);
     if (r >= VIC_NUM_REGS) {
         return;  // unused registers ignore writes
+    }
+    if (r == 0x19) {  // interrupt latch: writing 1 to a bit clears it (ack)
+        irq_latch = (uint8_t)(irq_latch & ~(val & 0x0F));
+        vic_update_irq();
+        return;
+    }
+    if (r == 0x1A) {  // interrupt enable
+        irq_enable = (uint8_t)(val & 0x0F);
+        vic_update_irq();
+        return;
     }
     vic.reg[r] = val;
     if (r == 0x11) {  // control 1 bit 7 is raster-compare bit 8

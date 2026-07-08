@@ -8,6 +8,19 @@ uint8_t bus_aec = 1;
 uint8_t bus_irq = 1;
 uint8_t bus_nmi = 1;
 
+// Bitmask of sources currently pulling IRQ low. bus_irq is active-low, so it is
+// low (0) when any source asserts. Single source of truth for the wired-OR.
+static uint8_t irq_sources;
+
+void bus_irq_set(uint8_t source, bool asserted) {
+    if (asserted) {
+        irq_sources |= source;
+    } else {
+        irq_sources = (uint8_t)(irq_sources & ~source);
+    }
+    bus_irq = irq_sources ? 0 : 1;
+}
+
 // Open-bus stub for the I/O chips not yet implemented (SID $D400, CIA $DC00,
 // etc.). Reads return $00 (a deterministic open-bus stand-in; a last-bus-value
 // model can replace it when the chips land). Writes are swallowed.
