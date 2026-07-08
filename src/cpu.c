@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "bus.h"
+#include "mem.h"
 
 // P register bit masks.
 #define FLAG_C 0x01
@@ -1705,14 +1706,21 @@ void cpu_init(void) {
     jammed = false;
     in_interrupt = false;
     intr_latched = false;
+    mem_update_config();  // port zeroed -> recompute banking (ROMs banked in)
 }
 
 void cpu_reset(void) {
-    // invariant: minimal reset for the Lorenz bench, which sets PC and registers
-    // directly. The full 7-cycle hardware reset sequence is not needed for the
-    // suite and can be added later. Leaves the CPU at an instruction boundary.
+    // Reset clears the port direction register (all inputs), so the PLA banks in
+    // the KERNAL/BASIC ROMs, and PC is loaded from the reset vector at
+    // $FFFC/$FFFD. The Lorenz runner does not call this; it configures the
+    // machine and PC directly.
+    // invariant: this is a simplified reset (direct vector load); the full
+    // cycle-exact 7-cycle reset sequence is not required by the suite.
+    cpu.port_dir = 0;  // DDR=0 -> control lines pull up -> ROMs banked in
+    mem_update_config();
     cpu.sp = 0xFD;
     cpu.p |= FLAG_I;
+    cpu.pc = (uint16_t)(bus_read(0xFFFC) | (bus_read(0xFFFD) << 8));
     cpu.cycle = 0;
     cpu.nmi_last = 1;
     halted = false;

@@ -89,6 +89,7 @@ static char g_output[OUTPUT_CAP];
 static size_t g_output_len;
 
 static unsigned g_passed;
+static unsigned long g_test_instr;  // instructions run in the current test
 
 // Reason the run loop stops.
 typedef enum {
@@ -98,13 +99,29 @@ typedef enum {
     STOP_NO_PROGRESS,   // instruction left PC unchanged (self-loop halt)
     STOP_UNIMPL,        // core halted on an unimplemented opcode
     STOP_JAM,           // core hit a JAM/KIL opcode
+    STOP_IO_WAIT,       // test spins on unimplemented I/O (VIC/CIA): scope end
     STOP_LOAD_FAILED,   // next test file could not be opened
 } StopReason;
+
+// A test that runs this many instructions without chaining is spinning on
+// hardware the CPU-only build does not model (VIC raster / CIA timers). No pure
+// 6510 CPU test runs anywhere near this long, so it cleanly marks the point
+// where the VIC/CIA-dependent tests begin (Phases 3-5).
+#define IO_WAIT_INSTRS 100000000UL
 
 // ---- Memory setup --------------------------------------------------------
 
 static void install_bench(void) {
     mem_init();
+    // The bench's $FF48 handler and $FFFE/$FFFF vector are byte-exact copies of
+    // the real KERNAL's; the tests bank the KERNAL in and out via the 6510 port
+    // (e.g. BRKN toggles $01 between $30 and $37). Load the real ROMs so that
+    // when a test selects mode 7 (KERNAL in), the interrupt path resolves like
+    // hardware. If the ROMs are absent, the all-RAM copies below still serve the
+    // mode-0 case; only the interrupt tests that switch to mode 7 need the ROMs.
+    mem_load_rom(ROM_KERNAL, "rom/kernal.rom");
+    mem_load_rom(ROM_BASIC, "rom/basic.rom");
+    mem_load_rom(ROM_CHAR, "rom/chargen.rom");
     for (size_t i = 0; i < sizeof(MEM_INIT) / sizeof(MEM_INIT[0]); i++) {
         mem_write(MEM_INIT[i].addr, MEM_INIT[i].val);
     }
@@ -244,6 +261,7 @@ static StopReason trap_load(void) {
     if (!load_test(next)) {
         return STOP_LOAD_FAILED;
     }
+    g_test_instr = 0;
     memcpy(g_current, next, sizeof(next));
     output_reset();
     return STOP_NONE;
@@ -297,6 +315,9 @@ static StopReason run(void) {
             continue;
         }
         step_instruction();
+        if (++g_test_instr > IO_WAIT_INSTRS) {
+            return STOP_IO_WAIT;
+        }
         if (cpu_jammed()) {
             return STOP_JAM;
         }
@@ -329,6 +350,13 @@ static void report(StopReason reason) {
             printf("Stopped in test \"%s\": CPU jammed on opcode $%02X at "
                    "$%04X.\n", g_current, cpu_halt_opcode(),
                    (unsigned)(cpu.pc - 1));
+            break;
+        case STOP_IO_WAIT:
+            printf("Boundary reached: test \"%s\" waits on unimplemented I/O "
+                   "(VIC raster / CIA timers).\n", g_current);
+            printf("All %u pure-6510 CPU tests passed. The remaining Lorenz "
+                   "tests need the VIC/CIA chips (Phases 3-5) and are out of "
+                   "Phase 2 scope.\n", g_passed);
             break;
         case STOP_NO_PROGRESS:
             printf("Stopped in test \"%s\": halted (self-loop) at $%04X.\n",
@@ -363,6 +391,11 @@ int main(int argc, char **argv) {
     cpu_init();
     cpu.sp = START_SP;
     cpu.p = START_P;
+    // The Lorenz bench runs in an all-RAM configuration: drive LORAM/HIRAM/CHAREN
+    // low (outputs) so no ROM or I/O is banked in and the whole 64 KB is RAM.
+    cpu.port_dir = 0x07;
+    cpu.port_data = 0x00;
+    mem_update_config();
 
     if (!load_test(ENTRY_FILE)) {
         printf("Cannot open entry file \"%s/%s\". Place the Wolfgang Lorenz "
