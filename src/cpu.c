@@ -19,6 +19,10 @@ CPU cpu;
 static bool halted;
 static uint8_t halt_opcode;
 
+// JAM state: a JAM/KIL opcode locks the CPU until reset. Distinct from an
+// unimplemented-opcode halt so the driver can report it differently.
+static bool jammed;
+
 // Interrupt sequencer state. One BRK/IRQ/NMI sequence runs at a time.
 static bool in_interrupt;
 static uint16_t int_vector;
@@ -1532,6 +1536,18 @@ static void las_op(uint8_t m) {
 }
 static void op_las(void) { read_abs_indexed(las_op, cpu.y); }
 
+// ---- Illegal: JAM / KIL ---------------------------------------------------
+//
+// A JAM opcode locks the CPU: PC freezes, no further fetches, interrupts are not
+// serviced, and only a reset recovers. The Lorenz suite never executes one on a
+// passing path, so this handler firing mid-suite signals a real control-flow bug
+// rather than an intended jam.
+static void op_jam(void) {
+    jammed = true;
+    halt_opcode = cpu.opcode;
+    cpu.cycle = 0;
+}
+
 // ---- Dispatch -------------------------------------------------------------
 
 typedef void (*OpFn)(void);
@@ -1665,6 +1681,12 @@ static const OpFn optable[256] = {
 
     // USBC: undocumented SBC #imm, identical to $E9.
     [0xEB] = op_sbc_imm,
+
+    // JAM / KIL: lock the CPU.
+    [0x02] = op_jam,      [0x12] = op_jam,      [0x22] = op_jam,
+    [0x32] = op_jam,      [0x42] = op_jam,      [0x52] = op_jam,
+    [0x62] = op_jam,      [0x72] = op_jam,      [0x92] = op_jam,
+    [0xB2] = op_jam,      [0xD2] = op_jam,      [0xF2] = op_jam,
 };
 
 static void op_unimpl(void) {
@@ -1680,6 +1702,7 @@ void cpu_init(void) {
     cpu.nmi_last = 1;  // NMI line idle high
     halted = false;
     halt_opcode = 0;
+    jammed = false;
     in_interrupt = false;
     intr_latched = false;
 }
@@ -1693,12 +1716,13 @@ void cpu_reset(void) {
     cpu.cycle = 0;
     cpu.nmi_last = 1;
     halted = false;
+    jammed = false;  // reset is the only recovery from a jam
     in_interrupt = false;
     intr_latched = false;
 }
 
 void cpu_tick(void) {
-    if (halted) {
+    if (halted || jammed) {
         return;
     }
     poll_nmi_edge();  // sample the NMI line every cycle
@@ -1736,3 +1760,5 @@ void cpu_tick(void) {
 bool cpu_halted(void) { return halted; }
 
 uint8_t cpu_halt_opcode(void) { return halt_opcode; }
+
+bool cpu_jammed(void) { return jammed; }

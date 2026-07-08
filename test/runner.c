@@ -97,6 +97,7 @@ typedef enum {
     STOP_RESET,         // reached a reset/quit vector
     STOP_NO_PROGRESS,   // instruction left PC unchanged (self-loop halt)
     STOP_UNIMPL,        // core halted on an unimplemented opcode
+    STOP_JAM,           // core hit a JAM/KIL opcode
     STOP_LOAD_FAILED,   // next test file could not be opened
 } StopReason;
 
@@ -296,6 +297,9 @@ static StopReason run(void) {
             continue;
         }
         step_instruction();
+        if (cpu_jammed()) {
+            return STOP_JAM;
+        }
         if (cpu_halted()) {
             return STOP_UNIMPL;
         }
@@ -318,6 +322,11 @@ static void report(StopReason reason) {
             break;
         case STOP_UNIMPL:
             printf("Stopped in test \"%s\": unimplemented opcode $%02X at "
+                   "$%04X.\n", g_current, cpu_halt_opcode(),
+                   (unsigned)(cpu.pc - 1));
+            break;
+        case STOP_JAM:
+            printf("Stopped in test \"%s\": CPU jammed on opcode $%02X at "
                    "$%04X.\n", g_current, cpu_halt_opcode(),
                    (unsigned)(cpu.pc - 1));
             break;

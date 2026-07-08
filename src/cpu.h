@@ -31,4 +31,8 @@ void cpu_tick(void);  // advance exactly one phi2 cycle, at most one bus access
 bool cpu_halted(void);
 uint8_t cpu_halt_opcode(void);
 
+// A JAM/KIL opcode locked the CPU; only cpu_reset recovers. The offending
+// opcode is available via cpu_halt_opcode().
+bool cpu_jammed(void);
+
 #endif // CPU_H
