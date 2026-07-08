@@ -1418,6 +1418,120 @@ static void sbx_op(uint8_t m) {
 }
 static void op_sbx(void) { read_imm(sbx_op); }
 
+// ---- Illegal unstable: ANE LXA SHA SHX SHY TAS ----------------------------
+//
+// These are analog-unstable on real hardware; we implement the deterministic
+// model VICE uses (which the Lorenz suite is validated against). The magic
+// constants come from VICE src/6510core.c: ANE uses $EF (0xEE/0xFF also satisfy
+// Lorenz's aneb), and LXA requires $EE (needed by real software, matches lxab).
+#define ANE_MAGIC 0xEF
+#define LXA_MAGIC 0xEE
+
+static void ane_op(uint8_t m) {
+    cpu.a = (uint8_t)((cpu.a | ANE_MAGIC) & cpu.x & m);
+    set_nz(cpu.a);
+}
+static void op_ane(void) { read_imm(ane_op); }
+
+static void lxa_op(uint8_t m) {
+    cpu.a = (uint8_t)((cpu.a | LXA_MAGIC) & m);
+    cpu.x = cpu.a;
+    set_nz(cpu.a);
+}
+static void op_lxa(void) { read_imm(lxa_op); }
+
+// SH-group store: value = reg AND (high byte of base address + 1). No flags.
+// On a page cross the destination high byte is corrupted to the stored value
+// (the carry into the high byte is suppressed and replaced by the value). This
+// is the VICE/Lorenz deterministic model. cpu.data carries the page-cross flag;
+// cpu.addr carries the un-fixed-up (base_hi:eff_lo) address.
+
+static void sh_abs_indexed(uint8_t regval, uint8_t idx, bool is_tas) {
+    // 5 cycles. abs,Y (SHA/SHX/TAS) or abs,X (SHY).
+    switch (cpu.cycle) {
+        case 1:
+            cpu.addr = bus_read(cpu.pc++);
+            cpu.cycle = 2;
+            break;
+        case 2: {
+            uint16_t base =
+                (uint16_t)((bus_read(cpu.pc++) << 8) | (cpu.addr & 0xFF));
+            unsigned s = (unsigned)(base & 0xFF) + idx;
+            cpu.addr = (uint16_t)((base & 0xFF00) | (s & 0xFF));
+            cpu.data = (s > 0xFF) ? 1 : 0;
+            cpu.cycle = 3;
+            break;
+        }
+        case 3:
+            bus_read(cpu.addr);  // dummy read at the un-fixed-up address
+            cpu.cycle = 4;
+            break;
+        case 4: {
+            uint8_t h = (uint8_t)((cpu.addr >> 8) + 1);
+            uint8_t v = (uint8_t)(regval & h);
+            if (is_tas) {
+                cpu.sp = regval;
+            }
+            uint16_t dest =
+                cpu.data ? (uint16_t)((v << 8) | (cpu.addr & 0xFF)) : cpu.addr;
+            bus_write(dest, v);
+            cpu.cycle = 0;
+            break;
+        }
+    }
+}
+
+static void sh_indy(uint8_t regval) {
+    // 6 cycles. SHA (indirect),Y.
+    switch (cpu.cycle) {
+        case 1:
+            cpu.data = bus_read(cpu.pc++);  // zero-page pointer
+            cpu.cycle = 2;
+            break;
+        case 2:
+            cpu.addr = bus_read(cpu.data);  // base low
+            cpu.cycle = 3;
+            break;
+        case 3: {
+            uint8_t base_hi = bus_read((uint8_t)(cpu.data + 1));
+            unsigned s = (unsigned)(cpu.addr & 0xFF) + cpu.y;
+            cpu.addr = (uint16_t)((base_hi << 8) | (s & 0xFF));
+            cpu.data = (s > 0xFF) ? 1 : 0;
+            cpu.cycle = 4;
+            break;
+        }
+        case 4:
+            bus_read(cpu.addr);  // dummy read
+            cpu.cycle = 5;
+            break;
+        case 5: {
+            uint8_t h = (uint8_t)((cpu.addr >> 8) + 1);
+            uint8_t v = (uint8_t)(regval & h);
+            uint16_t dest =
+                cpu.data ? (uint16_t)((v << 8) | (cpu.addr & 0xFF)) : cpu.addr;
+            bus_write(dest, v);
+            cpu.cycle = 0;
+            break;
+        }
+    }
+}
+
+static void op_sha_indy(void) { sh_indy((uint8_t)(cpu.a & cpu.x)); }
+static void op_sha_aby(void) { sh_abs_indexed((uint8_t)(cpu.a & cpu.x), cpu.y, false); }
+static void op_shx_aby(void) { sh_abs_indexed(cpu.x, cpu.y, false); }
+static void op_shy_abx(void) { sh_abs_indexed(cpu.y, cpu.x, false); }
+static void op_tas_aby(void) { sh_abs_indexed((uint8_t)(cpu.a & cpu.x), cpu.y, true); }
+
+// LAS/LAE ($BB abs,Y): A = X = SP = M AND SP. Read-type, 4 (+1 page cross).
+static void las_op(uint8_t m) {
+    uint8_t t = (uint8_t)(m & cpu.sp);
+    cpu.a = t;
+    cpu.x = t;
+    cpu.sp = t;
+    set_nz(t);
+}
+static void op_las(void) { read_abs_indexed(las_op, cpu.y); }
+
 // ---- Dispatch -------------------------------------------------------------
 
 typedef void (*OpFn)(void);
@@ -1543,6 +1657,14 @@ static const OpFn optable[256] = {
     [0x97] = op_sax_zpy,
     [0x0B] = op_anc,      [0x2B] = op_anc,      [0x4B] = op_alr,
     [0x6B] = op_arr,      [0xCB] = op_sbx,
+
+    // Unstable illegals (VICE/Lorenz deterministic model).
+    [0x8B] = op_ane,      [0xAB] = op_lxa,      [0xBB] = op_las,
+    [0x93] = op_sha_indy, [0x9F] = op_sha_aby,  [0x9E] = op_shx_aby,
+    [0x9C] = op_shy_abx,  [0x9B] = op_tas_aby,
+
+    // USBC: undocumented SBC #imm, identical to $E9.
+    [0xEB] = op_sbc_imm,
 };
 
 static void op_unimpl(void) {
