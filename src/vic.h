@@ -53,4 +53,29 @@ uint16_t vic_cycles_per_frame(void);  // derived: cycles_per_line * lines_per_fr
 uint8_t vic_read(uint16_t addr);
 void vic_write(uint16_t addr, uint8_t val);
 
+// Color RAM ($D800-$DBFF): a 1K x 4-bit static RAM holding the per-cell colour.
+// Routed here by the bus. Only the low nibble is stored/returned.
+uint8_t vic_color_read(uint16_t addr);
+void vic_color_write(uint16_t addr, uint8_t val);
+
+// ---- Framebuffer and rendering (Phase 3b) ---------------------------------
+//
+// The VIC renders standard 40x25 hires text mode into a plain ARGB8888
+// framebuffer (0xAARRGGBB per pixel). The framebuffer is display-independent
+// memory; the host layer blits it. Dimensions cover the PAL display window plus
+// a border.
+#define VIC_FB_WIDTH 384u
+#define VIC_FB_HEIGHT 272u
+
+// Paint the whole framebuffer from the current VIC registers, screen RAM,
+// Character ROM, and Color RAM.
+// invariant: this is end-of-frame rendering (approach b): it snapshots the
+// current state once per frame. Per-cycle pixel production (needed for mid-frame
+// raster effects, badlines, and sprites) replaces it in 3c-3e.
+void vic_render(void);
+
+const uint32_t *vic_framebuffer(void);  // VIC_FB_WIDTH * VIC_FB_HEIGHT pixels
+uint16_t vic_fb_width(void);
+uint16_t vic_fb_height(void);
+
 #endif // VIC_H

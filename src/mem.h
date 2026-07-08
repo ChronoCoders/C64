@@ -32,6 +32,10 @@ void mem_init(void);
 uint8_t mem_read(uint16_t addr);
 void mem_write(uint16_t addr, uint8_t val);
 
+// The VIC's memory view (bank 0): RAM directly, with Character ROM mapped in at
+// $1000-$1FFF. Used by the VIC to fetch the video matrix and character bitmaps.
+uint8_t mem_vic_fetch(uint16_t addr);
+
 // Routing table, one entry per 4 KB slot, indexed by the top nibble of the
 // address. Recomputed only on a port change (mem_update_config); read-only to
 // callers. The bus indexes it directly so each access is an O(1) lookup.

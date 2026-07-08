@@ -19,6 +19,18 @@ void mem_init(void) {
 
 uint8_t mem_read(uint16_t addr) { return ram[addr]; }
 
+uint8_t mem_vic_fetch(uint16_t addr) {
+    // The VIC reads memory directly (unbanked). In bank 0 the Character ROM is
+    // mapped into its view at $1000-$1FFF; everything else is RAM. CIA2-driven
+    // bank selection arrives in Phase 5, so bank 0 (the KERNAL boot default) is
+    // hardcoded here.
+    addr &= 0x3FFF;  // the VIC addresses a 16 KB bank
+    if (addr >= 0x1000 && addr < 0x2000) {
+        return rom_char[addr & 0x0FFF];
+    }
+    return ram[addr];
+}
+
 void mem_write(uint16_t addr, uint8_t val) { ram[addr] = val; }
 
 // Effective LORAM/HIRAM/CHAREN control lines from the 6510 port. Output bits
