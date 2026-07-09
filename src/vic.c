@@ -101,17 +101,23 @@ static int stall_grace = STALL_GRACE_CYCLES;
 static uint8_t irq_latch;   // $D019: sources that have latched
 static uint8_t irq_enable;  // $D01A: sources allowed to pull IRQ low
 
-// ---- Sprites (Phase 3d) ---------------------------------------------------
+// ---- Sprites (Phase 3d DMA/BA, Phase 3f per-cycle compositing) -------------
 //
-// Per-sprite DMA/display state machine (Bauer 3.8.1). MC is not stored: pixels
-// are composited per line by reading the sprite data block directly (see
-// sprite_composite), so only MCBASE (which drives the height cutoff and thus DMA
-// duration/BA), the DMA/display flags, and the Y-expansion flip-flop are needed.
+// Per-sprite DMA/display state machine (Bauer 3.8.1). MC is not stored: the
+// compositor reads the sprite data block directly using the MCBASE-derived row,
+// so only MCBASE (which drives the 21-row height cutoff and thus DMA duration
+// and BA), the DMA/display flags, and the Y-expansion flip-flop are tracked.
+// show/row are a per-line snapshot of disp/mcbase taken at cycle 1 and consumed
+// by the per-cycle compositor: a sprite row spans a whole line, so the vertical
+// display decision is latched once (which places a sprite at Y=V at raster V+1,
+// per Bauer 3.8.1), while horizontal pixels are emitted per cycle.
 typedef struct {
     uint8_t mcbase;  // MOB data counter base (6-bit); reaches 63 after 21 rows
     bool dma;        // DMA on -> the sprite steals bus cycles (s-accesses)
     bool disp;       // display on
     bool exp_ff;     // Y-expansion flip-flop
+    bool show;       // per-line latch of disp: display active on this line
+    uint8_t row;     // per-line latch of mcbase: byte offset of the shown row
 } SpriteDMA;
 static SpriteDMA spr[8];
 
@@ -294,53 +300,62 @@ static bool sprite_ba_low(unsigned bc) {
     return false;
 }
 
-// Per-line sprite compositing (Phase 3d): overlay the sprites on the current
-// line, resolve priority, and detect collisions. Pixels are read directly from
-// the sprite data block (equivalent to the DMA-fetched data for per-line-static
-// sprites); the cycle-exact DMA above governs bus timing and CPU stalling.
-// invariant: mid-line changes to sprite registers/data are not modelled.
-static uint8_t sc_bits[VIC_FB_WIDTH];
-static uint32_t sc_color[VIC_FB_WIDTH];
-static uint8_t sc_win[VIC_FB_WIDTH];
-
-static void sprite_composite(uint16_t line) {
+// Per-cycle sprite compositing (Phase 3f): overlay sprite pixels onto the 8
+// pixels render_cell just produced for this cycle. Sprite registers (X, colour,
+// expansion, multicolor, data pointer) are read live, so a mid-line change takes
+// effect from this cycle onward. The vertical display decision (show) and the
+// shown row (row) come from the DMA/display state machine (disp/MCBASE), latched
+// once per line at cycle 1, so a sprite at Y=V first displays at raster V+1
+// (Bauer 3.8.1). Priority and both collision types are evaluated per pixel.
+// invariant: the 24-bit sprite shift register is not modelled bit-for-bit, only
+// its per-cycle pixel result; horizontal reuse within a line (which the real
+// shift register forbids) is therefore possible in this model. The X > $164
+// same-line display exception (Bauer 3.8.1) is not modelled.
+static void sprite_composite_cycle(uint16_t line, unsigned bc) {
     if (line < FB_FIRST_LINE || line >= FB_FIRST_LINE + VIC_FB_HEIGHT) {
-        return;  // off-screen line
+        return;  // off-screen vertically
     }
-    memset(sc_bits, 0, sizeof(sc_bits));
+    if (bc < FB_FIRST_BCYC || bc >= FB_FIRST_BCYC + VIC_FB_WIDTH / 8u) {
+        return;  // off-screen horizontally
+    }
+    unsigned fbcol0 = (bc - FB_FIRST_BCYC) * 8u;
+    uint8_t bits[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // sprites present, per column
+    uint32_t colr[8];
+    uint8_t winner[8];  // frontmost (lowest) sprite, per column
     uint16_t vm = (uint16_t)((vic.reg[0x18] & 0xF0) << 6);
-    uint8_t en = vic.reg[0x15], mcr = vic.reg[0x1C], xer = vic.reg[0x1D];
-    uint8_t yer = vic.reg[0x17], msb = vic.reg[0x10];
+    uint8_t mcr = vic.reg[0x1C], xer = vic.reg[0x1D], msb = vic.reg[0x10];
     bool any = false;
 
     // Draw sprite 7 first so lower-numbered sprites overwrite (sprite 0 frontmost).
     for (int n = 7; n >= 0; n--) {
-        if (!((en >> n) & 1u)) {
-            continue;
+        if (!spr[n].show) {
+            continue;  // not displaying this line (state machine, not geometry)
         }
-        uint8_t ycoord = vic.reg[0x01 + 2 * n];
-        bool yexp = (yer >> n) & 1u;
-        unsigned height = yexp ? 42u : 21u;
-        if (line < ycoord || line >= (unsigned)ycoord + height) {
-            continue;
-        }
-        unsigned row = yexp ? (unsigned)(line - ycoord) / 2u : (unsigned)(line - ycoord);
-        uint8_t ptr = mem_vic_fetch((uint16_t)(vm + 0x3F8u + n));
-        uint16_t blk = (uint16_t)(ptr * 64u + row * 3u);
-        uint8_t d0 = mem_vic_fetch(blk), d1 = mem_vic_fetch((uint16_t)(blk + 1)),
-                d2 = mem_vic_fetch((uint16_t)(blk + 2));
-        uint32_t bits24 = ((uint32_t)d0 << 16) | ((uint32_t)d1 << 8) | d2;
         int sx = vic.reg[0x00 + 2 * n] | (((msb >> n) & 1u) ? 256 : 0);
         int fbx0 = sx + 8;  // sprite X 24 -> display column 0 -> fb column 32
         bool xexp = (xer >> n) & 1u;
         bool mc = (mcr >> n) & 1u;
+        unsigned units = mc ? 12u : 24u;
+        unsigned uw = mc ? (xexp ? 4u : 2u) : (xexp ? 2u : 1u);
+        int width = (int)(units * uw);
+        if (fbx0 + width <= (int)fbcol0 || fbx0 >= (int)(fbcol0 + 8u)) {
+            continue;  // sprite does not overlap this cycle's 8 columns
+        }
+        uint8_t ptr = mem_vic_fetch((uint16_t)(vm + 0x3F8u + n));
+        uint16_t blk = (uint16_t)(ptr * 64u + spr[n].row);
+        uint32_t bits24 = ((uint32_t)mem_vic_fetch(blk) << 16) |
+                          ((uint32_t)mem_vic_fetch((uint16_t)(blk + 1)) << 8) |
+                          mem_vic_fetch((uint16_t)(blk + 2));
         uint32_t scol = PALETTE[vic.reg[0x27 + n] & 0x0F];
         uint32_t mc0 = PALETTE[vic.reg[0x25] & 0x0F];
         uint32_t mc1 = PALETTE[vic.reg[0x26] & 0x0F];
-
-        unsigned units = mc ? 12u : 24u;
-        unsigned uw = mc ? (xexp ? 4u : 2u) : (xexp ? 2u : 1u);
-        for (unsigned u = 0; u < units; u++) {
+        for (unsigned px = 0; px < 8; px++) {
+            int c = (int)fbcol0 + (int)px;
+            int rel = c - fbx0;
+            if (rel < 0 || rel >= width) {
+                continue;
+            }
+            unsigned u = (unsigned)rel / uw;
             uint32_t color;
             if (mc) {
                 unsigned pair = (bits24 >> (22u - 2u * u)) & 3u;
@@ -350,38 +365,34 @@ static void sprite_composite(uint16_t line) {
                 if (!((bits24 >> (23u - u)) & 1u)) continue;
                 color = scol;
             }
-            for (unsigned w = 0; w < uw; w++) {
-                int c = fbx0 + (int)(u * uw + w);
-                if (c < 0 || c >= (int)VIC_FB_WIDTH) continue;
-                sc_bits[c] |= (uint8_t)(1u << n);
-                sc_color[c] = color;
-                sc_win[c] = (uint8_t)n;
-                any = true;
-            }
+            bits[px] |= (uint8_t)(1u << n);
+            colr[px] = color;
+            winner[px] = (uint8_t)n;
+            any = true;
         }
     }
     if (!any) {
         return;
     }
 
-    // Collisions and display, per touched column.
+    // Priority and both collision types, per pixel of this cycle.
     uint8_t old_ss = coll_ss, old_sb = coll_sb;
     size_t rowoff = (size_t)(line - FB_FIRST_LINE) * VIC_FB_WIDTH;
-    for (unsigned c = 0; c < VIC_FB_WIDTH; c++) {
-        uint8_t b = sc_bits[c];
+    for (unsigned px = 0; px < 8; px++) {
+        uint8_t b = bits[px];
         if (!b) {
             continue;
         }
+        unsigned c = fbcol0 + px;
         if (b & (b - 1)) {  // two or more sprites here
             coll_ss |= b;
         }
         if (line_fg[c]) {
             coll_sb |= b;
         }
-        uint8_t w = sc_win[c];
-        bool behind_fg = (vic.reg[0x1B] >> w) & 1u;
+        bool behind_fg = (vic.reg[0x1B] >> winner[px]) & 1u;
         if (!behind_fg || !line_fg[c]) {
-            framebuffer[rowoff + c] = sc_color[c];
+            framebuffer[rowoff + c] = colr[px];
         }
     }
     if (old_ss == 0 && coll_ss != 0) {
@@ -415,6 +426,15 @@ void vic_tick(void) {
 
     // Sprite DMA/display state machine (governs sprite BA and the height cutoff).
     sprite_dma_events(line, bc);
+    // Latch the per-line sprite display decision before this line's MCBASE
+    // update (cycle 15/16): show/row hold disp/mcbase as of the line start, so a
+    // sprite displays on the whole line V+1..V+21 rather than a partial line.
+    if (bc == 1) {
+        for (int n = 0; n < 8; n++) {
+            spr[n].show = spr[n].disp;
+            spr[n].row = spr[n].mcbase;
+        }
+    }
     if (line == BADLINE_FIRST_LINE && (vic.reg[0x11] & 0x10)) {
         den_frame = true;
     }
@@ -452,10 +472,7 @@ void vic_tick(void) {
 
     if (render_on) {
         render_cell(line, bc);
-        // Composite sprites once the line's cells are fully rendered.
-        if (bc == timing->cycles_per_line) {
-            sprite_composite(line);
-        }
+        sprite_composite_cycle(line, bc);
     }
 
     // Bauer 3.7.2 cycle 58: only while in display state, advance RC, and at the
