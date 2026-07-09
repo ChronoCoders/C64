@@ -99,6 +99,59 @@ typedef struct {
 
 static Env env[3];
 
+// ---- Filter (Phase 4c) ----------------------------------------------------
+//
+// Multimode state-variable filter; the 6581 is a two-integrator-loop design, so
+// one shared SVF fed by the sum of routed voices produces low/band/high-pass
+// outputs, and $D418 selects which are summed (modes combine, e.g. LP+HP=notch).
+// The digital control path (routing $D417, mode/volume $D418, cutoff/resonance
+// decode, which modes sum) is exact. The analog response is an approximate
+// fixed-point model, not bit-exact. Datasheet-sourced facts (independent of
+// reSID): the cutoff range 30 Hz..~12 kHz (2200 pF caps), the register layout,
+// and the resonance range (linear 0..15) are from the MOS 6581 datasheet.
+// invariant: the cutoff register->Hz map is a PLAUSIBLE-SHAPE APPROXIMATION, not
+//   a measured curve. The datasheet idealizes FC as linear; the real 6581 is
+//   strongly non-linear (nearly closed at low FC, then a steep rise) and varies
+//   widely chip to chip. The cubic here reproduces that KNOWN GENERAL SHAPE over
+//   the datasheet endpoints. It is NOT fitted to any measured per-chip data and
+//   is NOT derived from reSID/reSIDfp; no independent numeric cutoff-vs-register
+//   dataset was available clean-room. Treat cutoff frequency as approximate.
+// invariant: the resonance nibble maps to a modest Q range (~0.7 at res 0 to
+//   ~2.0 at res 15). The datasheet gives only "linear 0..15"; the Q values are a
+//   plausible choice for the 6581's mild resonance, not measured.
+// invariant: the 6581 analog distortion / component non-linearity ("grit") is
+//   approximated by the linear SVF, not modeled at the transistor level.
+// invariant: the voice DC offset and mixer non-linearity are deferred to the
+//   Phase 4d mix (voices are centered on 0x800 here).
+//
+// $D417 low nibble routes voices/external into the filter (bit v -> voice v,
+// bit 3 -> external in). $D418 bits 4/5/6 select LP/BP/HP, bit 7 cuts voice 3
+// from the direct path, low nibble is master volume.
+#define MODE_LP 0x10u
+#define MODE_BP 0x20u
+#define MODE_HP 0x40u
+#define MODE_3OFF 0x80u
+
+#define FILT_COEF_SHIFT 24      // cutoff/resonance coefficients are Q24
+#define FILT_STATE_SHIFT 6      // extra fractional bits on the integrator states
+#define FILT_CUTOFF_MIN 30      // Hz at FC=0 (datasheet)
+#define FILT_CUTOFF_SPAN 11970  // Hz added by FC=2047 -> ~12 kHz (datasheet)
+#define FILT_FC_MAX 2047u
+// f coefficient (Q24) per Hz: 2*pi*2^24 / PAL phi2 (985248); sin(x)~x for fc<<fs.
+#define FILT_HZ_TO_COEF 107
+// Resonance damping 1/Q (Q24): ~1.4 (res 0) down to ~0.5 (res 15), a modest peak.
+#define FILT_Q_BASE 23488102
+#define FILT_Q_STEP 1006633
+
+static struct {
+    int32_t lp;      // low-pass integrator state (scaled by FILT_STATE_SHIFT)
+    int32_t bp;      // band-pass integrator state
+    int32_t coef_f;  // cutoff coefficient (Q24)
+    int32_t coef_q;  // resonance damping = 1/Q (Q24)
+} filt;
+static int32_t filter_out;  // filtered path output (signal units)
+static int32_t direct_out;  // unrouted voices sum (signal units)
+
 // ---- Waveform generators (12-bit) -----------------------------------------
 
 static uint16_t wave_triangle(unsigned v) {
@@ -250,6 +303,69 @@ static void envelope_clock(unsigned v) {
     }
 }
 
+// ---- Filter (state-variable, fixed-point) ---------------------------------
+
+static int32_t voice_audio(unsigned v) {
+    int32_t wf = (int32_t)voice_output(v) - 2048;  // center the 12-bit waveform
+    return wf * (int32_t)env[v].envelope;           // apply the 8-bit envelope
+}
+
+// Cutoff curve: a cubic in the 11-bit register over the datasheet 30 Hz..12 kHz
+// range, shaped to the 6581's known general behavior (a low plateau at small FC,
+// then a steep rise near the top). See the invariant in the filter section: this
+// is a plausible-shape approximation, not fitted to measured data.
+static uint32_t filter_fc_to_hz(uint32_t fc) {
+    return (uint32_t)FILT_CUTOFF_MIN +
+           (uint32_t)(((uint64_t)FILT_CUTOFF_SPAN * fc * fc * fc) /
+                      ((uint64_t)FILT_FC_MAX * FILT_FC_MAX * FILT_FC_MAX));
+}
+
+static void filter_update_cutoff(void) {
+    uint32_t fc = ((uint32_t)reg[0x16] << 3) | (reg[0x15] & 0x07u);  // 0..2047
+    filt.coef_f = (int32_t)(filter_fc_to_hz(fc) * (uint32_t)FILT_HZ_TO_COEF);
+}
+
+static void filter_update_res(void) {
+    uint32_t res = (uint32_t)(reg[0x17] >> 4);  // 0..15
+    filt.coef_q = FILT_Q_BASE - (int32_t)(res * (uint32_t)FILT_Q_STEP);
+}
+
+// One SVF step (Chamberlin form) over the sum of routed voices.
+static void filter_clock(void) {
+    uint8_t routing = (uint8_t)(reg[0x17] & 0x0Fu);
+    uint8_t mode = reg[0x18];
+    int32_t routed = 0;
+    int32_t direct = 0;
+    for (unsigned v = 0; v < 3; v++) {
+        int32_t s = voice_audio(v);
+        if (routing & (1u << v)) {
+            routed += s;
+        } else if (!(v == 2 && (mode & MODE_3OFF))) {
+            direct += s;  // voice 3 can be cut from the direct path (3OFF)
+        }
+    }
+    int32_t in = routed << FILT_STATE_SHIFT;
+    int32_t lp = filt.lp;
+    int32_t bp = filt.bp;
+    lp += (int32_t)(((int64_t)filt.coef_f * bp) >> FILT_COEF_SHIFT);
+    int32_t hp = in - lp - (int32_t)(((int64_t)filt.coef_q * bp) >> FILT_COEF_SHIFT);
+    bp += (int32_t)(((int64_t)filt.coef_f * hp) >> FILT_COEF_SHIFT);
+    filt.lp = lp;
+    filt.bp = bp;
+    int32_t fout = 0;
+    if (mode & MODE_LP) {
+        fout += lp;
+    }
+    if (mode & MODE_BP) {
+        fout += bp;
+    }
+    if (mode & MODE_HP) {
+        fout += hp;
+    }
+    filter_out = fout >> FILT_STATE_SHIFT;
+    direct_out = direct;
+}
+
 void sid_clock(void) {
     for (unsigned v = 0; v < 3; v++) {
         uint8_t ctrl = reg[REG_CTRL(v)];
@@ -271,6 +387,7 @@ void sid_clock(void) {
         }
         envelope_clock(v);  // envelope runs independently of TEST
     }
+    filter_clock();
 }
 
 // ---- Bus interface --------------------------------------------------------
@@ -296,6 +413,14 @@ void sid_write(uint16_t addr, uint8_t val) {
     }
     uint8_t old = reg[r];
     reg[r] = val;
+    if (r == 0x15 || r == 0x16) {  // cutoff registers
+        filter_update_cutoff();
+        return;
+    }
+    if (r == 0x17) {  // resonance (high nibble); routing (low nibble) read live
+        filter_update_res();
+        return;
+    }
     if (r != REG_CTRL(0) && r != REG_CTRL(1) && r != REG_CTRL(2)) {
         return;
     }
@@ -323,6 +448,16 @@ uint32_t sid_voice_noise(unsigned v) { return voice[v % 3u].noise_lfsr; }
 uint8_t sid_voice_envelope(unsigned v) { return env[v % 3u].envelope; }
 uint16_t sid_voice_rate_counter(unsigned v) { return env[v % 3u].rate_counter; }
 
+int32_t sid_filter_output(void) { return filter_out; }
+int32_t sid_direct_output(void) { return direct_out; }
+uint32_t sid_filter_cutoff_hz(void) {
+    return filter_fc_to_hz(((uint32_t)reg[0x16] << 3) | (reg[0x15] & 0x07u));
+}
+int32_t sid_output(void) {
+    uint8_t vol = (uint8_t)(reg[0x18] & 0x0Fu);
+    return (direct_out + filter_out) * (int32_t)vol;
+}
+
 void sid_voice_set_accumulator(unsigned v, uint32_t phase) {
     voice[v % 3u].accumulator = phase & ACC_MASK;
     voice[v % 3u].prev_bit19 = (voice[v % 3u].accumulator >> 19) & 1u;
@@ -341,6 +476,12 @@ void sid_reset(void) {
         env[v].exp_period = 1;
     }
     memset(reg, 0, sizeof(reg));
+    filt.lp = 0;
+    filt.bp = 0;
+    filter_out = 0;
+    direct_out = 0;
+    filter_update_cutoff();
+    filter_update_res();
 }
 
 void sid_init(void) { sid_reset(); }

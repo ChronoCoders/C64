@@ -37,6 +37,13 @@ bool sid_voice_overflow(unsigned v);          // wrapped on the last clock (sync
 uint32_t sid_voice_noise(unsigned v);         // 23-bit noise LFSR (inspection)
 uint8_t sid_voice_envelope(unsigned v);       // 8-bit ADSR envelope value
 uint16_t sid_voice_rate_counter(unsigned v);  // 15-bit envelope rate counter (inspection)
+
+// Internal audio path (Phase 4c). Signal-unit integers, not host format; Phase
+// 4d resamples sid_output() and delivers it to the host.
+int32_t sid_filter_output(void);  // filtered path (routed voices through the SVF)
+int32_t sid_direct_output(void);  // sum of the unrouted voices
+int32_t sid_output(void);         // (direct + filtered) scaled by master volume
+uint32_t sid_filter_cutoff_hz(void);  // mapped cutoff Hz (representative curve)
 void sid_voice_set_accumulator(unsigned v, uint32_t phase);  // test / sync reset
 
 #endif // SID_H
