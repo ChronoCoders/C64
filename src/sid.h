@@ -35,6 +35,8 @@ uint16_t sid_voice_output(unsigned v);        // current 12-bit waveform value
 bool sid_voice_msb(unsigned v);               // accumulator bit 23 (ring source)
 bool sid_voice_overflow(unsigned v);          // wrapped on the last clock (sync)
 uint32_t sid_voice_noise(unsigned v);         // 23-bit noise LFSR (inspection)
+uint8_t sid_voice_envelope(unsigned v);       // 8-bit ADSR envelope value
+uint16_t sid_voice_rate_counter(unsigned v);  // 15-bit envelope rate counter (inspection)
 void sid_voice_set_accumulator(unsigned v, uint32_t phase);  // test / sync reset
 
 #endif // SID_H

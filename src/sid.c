@@ -59,6 +59,46 @@ typedef struct {
 static Voice voice[3];
 static uint8_t reg[0x20];  // $D400-$D41F register file (writes land in 0x00-0x18)
 
+// ---- ADSR envelope (Phase 4b) ---------------------------------------------
+//
+// Sources (independent of reSID):
+//   Rate periods derive from the MOS 6581 datasheet attack/decay/release times
+//   (stated on a 1.0 MHz phi2 basis; a full 255-step attack at period P takes
+//   255*P clocks). The documented ADSR "delay bug" fixes the rate counter at 15
+//   bits: a register change to a smaller period leaves the counter above it, so
+//   it must wrap the full 32768 steps before matching again. Every rate period
+//   therefore fits 15 bits; the datasheet's slowest attack (8 s) gives ~31250,
+//   inside that. Exponential decay/release breakpoints (envelope 93/54/26/14/6
+//   -> divider 2/4/8/16/30, and 1 above 93) are the measured 6581R3 values
+//   reported by Laurent Plogue, "SID 6581R3 ADSR tables, up close"; they also
+//   reproduce the datasheet's 3:1 decay-to-attack ratio (a full 255->0 decay is
+//   756 rate ticks versus 255 for attack). reSID was not consulted.
+// invariant: the datasheet high-rate times are its own nominal figures; some
+//   emulators use longer measured high-rate periods. The values here reproduce
+//   the datasheet and stay within the documented 15-bit counter.
+
+#define REG_AD(v) (7u * (v) + 5u)  // attack (high nibble) / decay (low nibble)
+#define REG_SR(v) (7u * (v) + 6u)  // sustain (high nibble) / release (low nibble)
+#define ENV_RATE_MASK 0x7FFFu      // 15-bit rate counter
+
+// Rate counter period per 4-bit rate value, in envelope-clock (phi2) units.
+static const uint16_t RATE_PERIOD[16] = {
+    9,   32,   63,   95,   149,  220,   267,   313,
+    392, 977,  1954, 3137, 3922, 11765, 19531, 31250,
+};
+
+typedef enum { ENV_ATTACK = 0, ENV_DECAY = 1, ENV_RELEASE = 2 } EnvState;
+
+typedef struct {
+    uint8_t envelope;       // 8-bit output level
+    uint16_t rate_counter;  // 15-bit rate counter (exact-equality compare)
+    uint8_t exp_counter;    // exponential prescaler counter
+    uint8_t exp_period;     // current exponential divider (1,2,4,8,16,30)
+    EnvState state;
+} Env;
+
+static Env env[3];
+
 // ---- Waveform generators (12-bit) -----------------------------------------
 
 static uint16_t wave_triangle(unsigned v) {
@@ -147,6 +187,69 @@ static void noise_clock(unsigned v) {
     voice[v].noise_lfsr = l;
 }
 
+// ---- ADSR envelope generator ----------------------------------------------
+
+static uint8_t env_rate_value(unsigned v) {
+    switch (env[v].state) {
+        case ENV_ATTACK:
+            return (uint8_t)(reg[REG_AD(v)] >> 4);
+        case ENV_DECAY:
+            return (uint8_t)(reg[REG_AD(v)] & 0x0Fu);
+        default:
+            return (uint8_t)(reg[REG_SR(v)] & 0x0Fu);
+    }
+}
+
+static uint8_t env_sustain_level(unsigned v) {
+    uint8_t s = (uint8_t)(reg[REG_SR(v)] >> 4);
+    return (uint8_t)(s * 17u);  // nibble*17: 0->0, 15->255
+}
+
+static void envelope_clock(unsigned v) {
+    Env *e = &env[v];
+    // 15-bit rate counter with exact-equality compare: the ADSR delay bug. A
+    // register change to a smaller period leaves the counter above it, so the
+    // counter wraps the full 32768 steps before matching again.
+    e->rate_counter = (uint16_t)((e->rate_counter + 1u) & ENV_RATE_MASK);
+    if (e->rate_counter != RATE_PERIOD[env_rate_value(v)]) {
+        return;
+    }
+    e->rate_counter = 0;
+
+    if (e->state == ENV_ATTACK) {
+        if (e->envelope < 0xFFu) {
+            e->envelope++;  // linear rise
+        }
+        if (e->envelope == 0xFFu) {
+            e->state = ENV_DECAY;
+            e->exp_counter = 0;
+            e->exp_period = 1;
+        }
+        return;
+    }
+
+    // Decay and release: exponential via the prescaler counter.
+    e->exp_counter++;
+    if (e->exp_counter != e->exp_period) {
+        return;
+    }
+    e->exp_counter = 0;
+    uint8_t target = (e->state == ENV_DECAY) ? env_sustain_level(v) : 0u;
+    // Exact-equality hold (decay stops at sustain, release at 0); this also gives
+    // the documented comparator behavior when sustain is changed mid-decay.
+    if (e->envelope != target && e->envelope != 0u) {
+        e->envelope--;
+        switch (e->envelope) {  // documented 6581 exponential breakpoints
+            case 93: e->exp_period = 2; break;
+            case 54: e->exp_period = 4; break;
+            case 26: e->exp_period = 8; break;
+            case 14: e->exp_period = 16; break;
+            case 6:  e->exp_period = 30; break;
+            default: break;
+        }
+    }
+}
+
 void sid_clock(void) {
     for (unsigned v = 0; v < 3; v++) {
         uint8_t ctrl = reg[REG_CTRL(v)];
@@ -154,18 +257,19 @@ void sid_clock(void) {
             voice[v].accumulator = 0;  // held in reset while TEST is set
             voice[v].overflow = false;
             voice[v].prev_bit19 = false;
-            continue;
+        } else {
+            uint32_t freq =
+                (uint32_t)reg[REG_FREQLO(v)] | ((uint32_t)reg[REG_FREQHI(v)] << 8);
+            uint32_t sum = voice[v].accumulator + freq;
+            voice[v].overflow = sum > ACC_MASK;
+            voice[v].accumulator = sum & ACC_MASK;
+            bool bit19 = (voice[v].accumulator >> 19) & 1u;
+            if (bit19 && !voice[v].prev_bit19) {  // rising edge clocks the LFSR
+                noise_clock(v);
+            }
+            voice[v].prev_bit19 = bit19;
         }
-        uint32_t freq =
-            (uint32_t)reg[REG_FREQLO(v)] | ((uint32_t)reg[REG_FREQHI(v)] << 8);
-        uint32_t sum = voice[v].accumulator + freq;
-        voice[v].overflow = sum > ACC_MASK;
-        voice[v].accumulator = sum & ACC_MASK;
-        bool bit19 = (voice[v].accumulator >> 19) & 1u;
-        if (bit19 && !voice[v].prev_bit19) {  // rising edge clocks the LFSR
-            noise_clock(v);
-        }
-        voice[v].prev_bit19 = bit19;
+        envelope_clock(v);  // envelope runs independently of TEST
     }
 }
 
@@ -176,9 +280,10 @@ uint8_t sid_read(uint16_t addr) {
     switch (r) {
         case 0x1B:  // OSC3: upper 8 bits of voice 3's waveform output
             return (uint8_t)(voice_output(2) >> 4);
+        case 0x1C:  // ENV3: voice 3 envelope output
+            return env[2].envelope;
         case 0x19:  // POTX (Phase 5+)
         case 0x1A:  // POTY (Phase 5+)
-        case 0x1C:  // ENV3 (Phase 4b)
         default:    // write-only control registers read as 0
             return 0x00;
     }
@@ -189,11 +294,20 @@ void sid_write(uint16_t addr, uint8_t val) {
     if (r > 0x18u) {
         return;  // $D419-$D41F are read-only / unused
     }
+    uint8_t old = reg[r];
     reg[r] = val;
-    // Writing a control register with TEST set resets the accumulator at once
-    // (sid_clock keeps holding it while TEST stays set).
-    if ((val & CTRL_TEST) && (r == REG_CTRL(0) || r == REG_CTRL(1) || r == REG_CTRL(2))) {
-        unsigned v = (r == REG_CTRL(0)) ? 0u : (r == REG_CTRL(1)) ? 1u : 2u;
+    if (r != REG_CTRL(0) && r != REG_CTRL(1) && r != REG_CTRL(2)) {
+        return;
+    }
+    unsigned v = (r == REG_CTRL(0)) ? 0u : (r == REG_CTRL(1)) ? 1u : 2u;
+    // Gate edges drive the envelope. The rate counter is intentionally not reset
+    // here, so a subsequent rate-register change feeds the delay bug.
+    if (!(old & CTRL_GATE) && (val & CTRL_GATE)) {
+        env[v].state = ENV_ATTACK;
+    } else if ((old & CTRL_GATE) && !(val & CTRL_GATE)) {
+        env[v].state = ENV_RELEASE;
+    }
+    if (val & CTRL_TEST) {  // TEST resets the accumulator at once
         voice[v].accumulator = 0;
         voice[v].prev_bit19 = false;
     }
@@ -206,6 +320,8 @@ uint16_t sid_voice_output(unsigned v) { return voice_output(v % 3u); }
 bool sid_voice_msb(unsigned v) { return (voice[v % 3u].accumulator & ACC_MSB) != 0; }
 bool sid_voice_overflow(unsigned v) { return voice[v % 3u].overflow; }
 uint32_t sid_voice_noise(unsigned v) { return voice[v % 3u].noise_lfsr; }
+uint8_t sid_voice_envelope(unsigned v) { return env[v % 3u].envelope; }
+uint16_t sid_voice_rate_counter(unsigned v) { return env[v % 3u].rate_counter; }
 
 void sid_voice_set_accumulator(unsigned v, uint32_t phase) {
     voice[v % 3u].accumulator = phase & ACC_MASK;
@@ -218,6 +334,11 @@ void sid_reset(void) {
     memset(voice, 0, sizeof(voice));
     for (unsigned v = 0; v < 3; v++) {
         voice[v].noise_lfsr = LFSR_SEED;
+    }
+    memset(env, 0, sizeof(env));
+    for (unsigned v = 0; v < 3; v++) {
+        env[v].state = ENV_RELEASE;  // gate low, envelope held at 0
+        env[v].exp_period = 1;
     }
     memset(reg, 0, sizeof(reg));
 }
