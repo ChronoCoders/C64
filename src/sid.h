@@ -42,8 +42,16 @@ uint16_t sid_voice_rate_counter(unsigned v);  // 15-bit envelope rate counter (i
 // 4d resamples sid_output() and delivers it to the host.
 int32_t sid_filter_output(void);  // filtered path (routed voices through the SVF)
 int32_t sid_direct_output(void);  // sum of the unrouted voices
-int32_t sid_output(void);         // (direct + filtered) scaled by master volume
+int32_t sid_output(void);         // final mix: (direct + filtered + DC) * volume
 uint32_t sid_filter_cutoff_hz(void);  // mapped cutoff Hz (representative curve)
+
+// Audio output (Phase 4d). The machine loop clocks the SID at phi2 when audio is
+// enabled; sid_clock() resamples to the host rate and buffers 16-bit mono
+// samples. The host drains them with sid_audio_read().
+void sid_set_audio(bool on);
+bool sid_audio_enabled(void);
+unsigned sid_audio_read(int16_t *dst, unsigned max);  // returns samples copied
+unsigned sid_audio_available(void);
 void sid_voice_set_accumulator(unsigned v, uint32_t phase);  // test / sync reset
 
 #endif // SID_H

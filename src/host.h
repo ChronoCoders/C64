@@ -25,4 +25,14 @@ bool host_poll(void);
 
 void host_shutdown(void);
 
+// SDL audio output (Phase 4d): mono signed-16-bit at the given rate, via SDL's
+// queue API (fed from the same thread as the main loop, so no locking). Returns
+// false on failure (the caller may continue without sound).
+bool host_audio_init(int rate);
+void host_audio_push(const int16_t *samples, int count);
+// Block until the queued audio drains to target_samples, pacing the emulation to
+// audio realtime.
+void host_audio_pace(unsigned target_samples);
+void host_audio_shutdown(void);
+
 #endif // HOST_H

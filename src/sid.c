@@ -37,7 +37,9 @@
 #define REG_PWHI(v) (7u * (v) + 3u)
 #define REG_CTRL(v) (7u * (v) + 4u)
 
-// Ring/sync source is the previous voice (voice 0 <- 2, 1 <- 0, 2 <- 1).
+// Ring/sync source is the previous voice, per the 6581 datasheet (osc1<-osc3,
+// osc2<-osc1, osc3<-osc2, i.e. voice 0 <- 2, 1 <- 0, 2 <- 1). Independent of
+// reSID.
 #define SYNC_SRC(v) (((v) + 2u) % 3u)
 
 #define ACC_MASK 0x00FFFFFFu
@@ -151,6 +153,42 @@ static struct {
 } filt;
 static int32_t filter_out;  // filtered path output (signal units)
 static int32_t direct_out;  // unrouted voices sum (signal units)
+
+// ---- Audio output / resampling (Phase 4d) ---------------------------------
+//
+// The SID is mono. sid_clock() (driven at phi2 by the machine loop) box-averages
+// the phi2-rate mix down to the host rate by Bresenham decimation, DC-blocks it
+// (AC-coupling), and pushes 16-bit samples into a ring the host drains.
+// Producer (sid_clock) and consumer (sid_audio_read) are single each; the host
+// uses SDL's queue API from the same thread as the loop, so no locking is
+// needed. Resampling and the mix are fixed-point; no floating point.
+// invariant: box-average decimation is only first-order anti-aliasing; strong
+//   SID high harmonics still alias somewhat (a polyphase FIR would improve it).
+#define SID_PHI2_HZ 985248u   // PAL phi2, the resampling reference rate
+#define AUDIO_RATE_HZ 44100u  // host output rate
+#define AUDIO_OUT_SHIFT 10    // mix -> 16-bit output scale
+#define AUDIO_DC_SHIFT 11     // one-pole DC-blocker time constant (~3 Hz)
+#define AUDIO_RING_SIZE 8192u
+#define AUDIO_RING_MASK (AUDIO_RING_SIZE - 1u)
+// 6581 mixer DC reference, scaled by master volume so volume-register writes
+// step the output. The volume register driving the output DAC is described in
+// the 6581 datasheet; the 4-bit $D418 sample ("digi") technique built on it is
+// widely documented in the C64 scene. Independent of reSID.
+// invariant: the magnitude is a plausible approximation, not a measured 6581
+//   offset. The DC blocker AC-couples the output (keeping digi transients,
+//   removing steady DC); per-voice waveform DAC offset and mixer non-linearity
+//   are not modelled. A full 4-bit digi stream written to $D418 does play (each
+//   write sets a proportional output level, resampled and AC-coupled).
+#define MIXER_DC 524288
+
+static bool audio_on;
+static int16_t audio_ring[AUDIO_RING_SIZE];
+static unsigned audio_head;  // producer index
+static unsigned audio_tail;  // consumer index
+static int64_t rs_sum;       // box-average accumulator
+static int32_t rs_count;
+static uint32_t rs_phase;    // Bresenham resample phase
+static int64_t dc_lp;        // DC-blocker lowpass estimate
 
 // ---- Waveform generators (12-bit) -----------------------------------------
 
@@ -367,18 +405,35 @@ static void filter_clock(void) {
 }
 
 void sid_clock(void) {
+    bool msb_rose[3];
+    // Pass 1: advance oscillators; detect each MSB 0->1 (the hard-sync trigger,
+    // per the 6581 datasheet: sync resets a voice when the source MSB increases).
     for (unsigned v = 0; v < 3; v++) {
-        uint8_t ctrl = reg[REG_CTRL(v)];
-        if (ctrl & CTRL_TEST) {
+        bool old_msb = (voice[v].accumulator & ACC_MSB) != 0;
+        if (reg[REG_CTRL(v)] & CTRL_TEST) {
             voice[v].accumulator = 0;  // held in reset while TEST is set
             voice[v].overflow = false;
-            voice[v].prev_bit19 = false;
         } else {
             uint32_t freq =
                 (uint32_t)reg[REG_FREQLO(v)] | ((uint32_t)reg[REG_FREQHI(v)] << 8);
             uint32_t sum = voice[v].accumulator + freq;
             voice[v].overflow = sum > ACC_MASK;
             voice[v].accumulator = sum & ACC_MASK;
+        }
+        bool new_msb = (voice[v].accumulator & ACC_MSB) != 0;
+        msb_rose[v] = new_msb && !old_msb;
+    }
+    // Pass 2: hard sync resets voice v when its source (voice n-1) MSB rose.
+    for (unsigned v = 0; v < 3; v++) {
+        if ((reg[REG_CTRL(v)] & CTRL_SYNC) && msb_rose[SYNC_SRC(v)]) {
+            voice[v].accumulator = 0;
+        }
+    }
+    // Pass 3: noise LFSR (post-sync accumulator) and envelope.
+    for (unsigned v = 0; v < 3; v++) {
+        if (reg[REG_CTRL(v)] & CTRL_TEST) {
+            voice[v].prev_bit19 = false;
+        } else {
             bool bit19 = (voice[v].accumulator >> 19) & 1u;
             if (bit19 && !voice[v].prev_bit19) {  // rising edge clocks the LFSR
                 noise_clock(v);
@@ -388,6 +443,33 @@ void sid_clock(void) {
         envelope_clock(v);  // envelope runs independently of TEST
     }
     filter_clock();
+
+    // Pass 4: resample the phi2-rate mix to the host rate (box average +
+    // Bresenham decimation), DC-block, and push a 16-bit sample.
+    if (audio_on) {
+        rs_sum += sid_output();
+        rs_count++;
+        rs_phase += AUDIO_RATE_HZ;
+        if (rs_phase >= SID_PHI2_HZ) {
+            rs_phase -= SID_PHI2_HZ;
+            int32_t avg = (int32_t)(rs_sum / rs_count);
+            rs_sum = 0;
+            rs_count = 0;
+            dc_lp += avg - (int32_t)(dc_lp >> AUDIO_DC_SHIFT);
+            int32_t hp = avg - (int32_t)(dc_lp >> AUDIO_DC_SHIFT);
+            int32_t o = hp >> AUDIO_OUT_SHIFT;
+            if (o > 32767) {
+                o = 32767;
+            } else if (o < -32768) {
+                o = -32768;
+            }
+            unsigned next = (audio_head + 1u) & AUDIO_RING_MASK;
+            if (next != audio_tail) {
+                audio_ring[audio_head] = (int16_t)o;
+                audio_head = next;
+            }
+        }
+    }
 }
 
 // ---- Bus interface --------------------------------------------------------
@@ -455,7 +537,23 @@ uint32_t sid_filter_cutoff_hz(void) {
 }
 int32_t sid_output(void) {
     uint8_t vol = (uint8_t)(reg[0x18] & 0x0Fu);
-    return (direct_out + filter_out) * (int32_t)vol;
+    return (direct_out + filter_out + MIXER_DC) * (int32_t)vol;
+}
+
+void sid_set_audio(bool on) { audio_on = on; }
+bool sid_audio_enabled(void) { return audio_on; }
+
+unsigned sid_audio_read(int16_t *dst, unsigned max) {
+    unsigned n = 0;
+    while (n < max && audio_tail != audio_head) {
+        dst[n++] = audio_ring[audio_tail];
+        audio_tail = (audio_tail + 1u) & AUDIO_RING_MASK;
+    }
+    return n;
+}
+
+unsigned sid_audio_available(void) {
+    return (audio_head - audio_tail) & AUDIO_RING_MASK;
 }
 
 void sid_voice_set_accumulator(unsigned v, uint32_t phase) {
@@ -482,6 +580,13 @@ void sid_reset(void) {
     direct_out = 0;
     filter_update_cutoff();
     filter_update_res();
+    audio_on = false;
+    audio_head = 0;
+    audio_tail = 0;
+    rs_sum = 0;
+    rs_count = 0;
+    rs_phase = 0;
+    dc_lp = 0;
 }
 
 void sid_init(void) { sid_reset(); }

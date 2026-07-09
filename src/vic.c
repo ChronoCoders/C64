@@ -7,6 +7,7 @@
 #include "bus.h"
 #include "cpu.h"
 #include "mem.h"
+#include "sid.h"
 
 // PAL 6569 timing. NTSC (6567) is a reserved slot, filled in a later phase:
 //   {"NTSC", 65, 263, 48, 247}  -- not implemented now, values not yet verified.
@@ -513,6 +514,13 @@ void vic_step(void) {
     vic_tick();
     if (cpu_should_run()) {
         cpu_tick();
+    }
+    // The SID is clocked at phi2 alongside the CPU/VIC when audio is enabled
+    // (the runtime binary). This only advances SID-internal state; it never
+    // touches VIC/CPU/bus state, so VIC/CPU cycle timing is unchanged. Headless
+    // runs (Lorenz, unit tests) leave audio off, so this is a no-op there.
+    if (sid_audio_enabled()) {
+        sid_clock();
     }
 }
 

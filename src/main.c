@@ -4,7 +4,11 @@
 #include "cpu.h"
 #include "host.h"
 #include "mem.h"
+#include "sid.h"
 #include "vic.h"
+
+#define AUDIO_RATE 44100
+#define AUDIO_TARGET_SAMPLES 3528  // ~4 PAL frames of buffered audio (paces to realtime)
 
 // C64 emulator entry point. By default it opens an SDL2 window, boots the real
 // ROMs, and runs frames continuously, presenting each rendered frame. With
@@ -47,10 +51,27 @@ static int run_visible(void) {
                "available? Try --headless.\n", host_error());
         return 1;
     }
+    bool audio = host_audio_init(AUDIO_RATE);
+    sid_set_audio(audio);  // when enabled, the machine loop clocks the SID at phi2
+    if (!audio) {
+        printf("C64: audio device unavailable (%s); running without sound.\n",
+               host_error());
+    }
     while (!host_poll()) {
         vic_run_frame();  // per-cycle rendering fills the framebuffer as it runs
+        if (audio) {
+            int16_t abuf[2048];
+            unsigned n;
+            while ((n = sid_audio_read(abuf, 2048)) > 0) {
+                host_audio_push(abuf, (int)n);
+            }
+        }
         host_present(vic_framebuffer());
+        if (audio) {
+            host_audio_pace(AUDIO_TARGET_SAMPLES);  // pace emulation to audio realtime
+        }
     }
+    host_audio_shutdown();
     host_shutdown();
     return 0;
 }

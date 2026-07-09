@@ -10,9 +10,10 @@ static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
 static int fb_pitch;  // bytes per framebuffer row
+static SDL_AudioDeviceID audio_dev;
 
 bool host_init(int width, int height, const char *title) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         return false;
     }
     fb_pitch = width * (int)sizeof(uint32_t);
@@ -62,6 +63,45 @@ bool host_poll(void) {
 }
 
 const char *host_error(void) { return SDL_GetError(); }
+
+bool host_audio_init(int rate) {
+    SDL_AudioSpec want, have;
+    SDL_memset(&want, 0, sizeof(want));
+    want.freq = rate;
+    want.format = AUDIO_S16SYS;
+    want.channels = 1;      // SID is mono
+    want.samples = 1024;
+    want.callback = NULL;   // use SDL_QueueAudio from the main thread
+    audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+    if (audio_dev == 0) {
+        return false;
+    }
+    SDL_PauseAudioDevice(audio_dev, 0);  // begin playback
+    return true;
+}
+
+void host_audio_push(const int16_t *samples, int count) {
+    if (audio_dev != 0 && count > 0) {
+        SDL_QueueAudio(audio_dev, samples, (Uint32)count * sizeof(int16_t));
+    }
+}
+
+void host_audio_pace(unsigned target_samples) {
+    if (audio_dev == 0) {
+        return;
+    }
+    Uint32 target_bytes = target_samples * (Uint32)sizeof(int16_t);
+    while (SDL_GetQueuedAudioSize(audio_dev) > target_bytes) {
+        SDL_Delay(1);
+    }
+}
+
+void host_audio_shutdown(void) {
+    if (audio_dev != 0) {
+        SDL_CloseAudioDevice(audio_dev);
+        audio_dev = 0;
+    }
+}
 
 void host_shutdown(void) {
     if (texture) {
