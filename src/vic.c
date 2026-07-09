@@ -101,6 +101,45 @@ static int stall_grace = STALL_GRACE_CYCLES;
 static uint8_t irq_latch;   // $D019: sources that have latched
 static uint8_t irq_enable;  // $D01A: sources allowed to pull IRQ low
 
+// ---- Sprites (Phase 3d) ---------------------------------------------------
+//
+// Per-sprite DMA/display state machine (Bauer 3.8.1). MC is not stored: pixels
+// are composited per line by reading the sprite data block directly (see
+// sprite_composite), so only MCBASE (which drives the height cutoff and thus DMA
+// duration/BA), the DMA/display flags, and the Y-expansion flip-flop are needed.
+typedef struct {
+    uint8_t mcbase;  // MOB data counter base (6-bit); reaches 63 after 21 rows
+    bool dma;        // DMA on -> the sprite steals bus cycles (s-accesses)
+    bool disp;       // display on
+    bool exp_ff;     // Y-expansion flip-flop
+} SpriteDMA;
+static SpriteDMA spr[8];
+
+// BA-low window per sprite in Bauer 1-based cycles: [P(n)-3 .. P(n)+1], where
+// P(n) is the first s-access cycle (s0..s2 at line end 58/60/62, s3..s7 at next
+// line start 1/3/5/7/9). Sprites 3 and 4 wrap their 3-cycle lead into cycles
+// 61-63 of the previous line. Bit i set means "BA low in cycle i" (i = 1..63).
+// The 3-cycle lead is consumed by the CPU write grace, so the CPU stall equals
+// the 2 s-access cycles per active sprite. Source: Bauer 3.6.3 / 3.8.1.
+static const uint64_t SPRITE_BA_MASK[8] = {
+    /* s0 55-59 */ (1ull<<55)|(1ull<<56)|(1ull<<57)|(1ull<<58)|(1ull<<59),
+    /* s1 57-61 */ (1ull<<57)|(1ull<<58)|(1ull<<59)|(1ull<<60)|(1ull<<61),
+    /* s2 59-63 */ (1ull<<59)|(1ull<<60)|(1ull<<61)|(1ull<<62)|(1ull<<63),
+    /* s3       */ (1ull<<61)|(1ull<<62)|(1ull<<63)|(1ull<<1)|(1ull<<2),
+    /* s4       */ (1ull<<63)|(1ull<<1)|(1ull<<2)|(1ull<<3)|(1ull<<4),
+    /* s5 2-6   */ (1ull<<2)|(1ull<<3)|(1ull<<4)|(1ull<<5)|(1ull<<6),
+    /* s6 4-8   */ (1ull<<4)|(1ull<<5)|(1ull<<6)|(1ull<<7)|(1ull<<8),
+    /* s7 6-10  */ (1ull<<6)|(1ull<<7)|(1ull<<8)|(1ull<<9)|(1ull<<10),
+};
+
+// Collision registers ($D01E sprite-sprite, $D01F sprite-background). They
+// accumulate and are cleared on read. Foreground mask for the current line (set
+// by render_cell) drives sprite-background collision and sprite-vs-foreground
+// priority.
+static uint8_t coll_ss;   // $D01E
+static uint8_t coll_sb;   // $D01F
+static uint8_t line_fg[VIC_FB_WIDTH];  // 1 where the current line's pixel is foreground graphics
+
 // A VIC interrupt is asserted when a latched source is also enabled. This is the
 // single point that drives the VIC's contribution to the wired-OR IRQ line.
 static bool vic_irq_pending(void) {
@@ -118,6 +157,7 @@ void vic_init(void) {
     memset(framebuffer, 0, sizeof(framebuffer));
     memset(buffer_char, 0, sizeof(buffer_char));
     memset(buffer_col, 0, sizeof(buffer_col));
+    memset(line_fg, 0, sizeof(line_fg));
     vic_reset();
 }
 
@@ -136,6 +176,9 @@ void vic_reset(void) {
     bus_ba = 1;
     irq_latch = 0;
     irq_enable = 0;
+    memset(spr, 0, sizeof(spr));
+    coll_ss = 0;
+    coll_sb = 0;
     vic_update_irq();  // release the IRQ line
 }
 
@@ -155,17 +198,18 @@ static void render_cell(uint16_t line, unsigned bc) {
     if (bc < FB_FIRST_BCYC || bc >= FB_FIRST_BCYC + VIC_FB_WIDTH / 8u) {
         return;  // off-screen horizontally (horizontal blanking)
     }
-    size_t off = (size_t)(line - FB_FIRST_LINE) * VIC_FB_WIDTH +
-                 (bc - FB_FIRST_BCYC) * 8u;
+    unsigned fbcol = (bc - FB_FIRST_BCYC) * 8u;
+    size_t off = (size_t)(line - FB_FIRST_LINE) * VIC_FB_WIDTH + fbcol;
     bool display = den_frame && line >= DISP_FIRST_LINE && line <= DISP_LAST_LINE &&
                    bc >= GACCESS_FIRST && bc <= GACCESS_LAST;
     if (!display) {
         // invariant: the border is computed from display geometry here; the
         // hardware border flip-flops (for open-border/sprite-in-border tricks)
-        // arrive with sprites (3d).
+        // are not modelled. Border pixels are not foreground for collision.
         uint32_t b = PALETTE[vic.reg[0x20] & 0x0F];
         for (unsigned px = 0; px < 8; px++) {
             framebuffer[off + px] = b;
+            line_fg[fbcol + px] = 0;
         }
         return;
     }
@@ -175,7 +219,178 @@ static void render_cell(uint16_t line, unsigned bc) {
     uint16_t cb = (uint16_t)((vic.reg[0x18] & 0x0E) << 10);
     uint8_t bits = mem_vic_fetch((uint16_t)(cb + buffer_char[col] * 8u + rc));
     for (unsigned px = 0; px < 8; px++) {
-        framebuffer[off + px] = (bits & (0x80u >> px)) ? fg : bg;
+        bool on = (bits & (0x80u >> px)) != 0;  // standard hires text: set bit = foreground
+        framebuffer[off + px] = on ? fg : bg;
+        line_fg[fbcol + px] = on ? 1 : 0;
+    }
+}
+
+// Sprite DMA/display state machine (Bauer 3.8.1), run in phi1 of the named
+// cycles. MC is not tracked (rendering reads the data block directly); MCBASE
+// drives the 21-row height cutoff that ends DMA. bc is Bauer's 1-based cycle.
+static void sprite_dma_events(uint16_t line, unsigned bc) {
+    uint8_t yexp = vic.reg[0x17];
+    uint8_t en = vic.reg[0x15];
+    for (int n = 0; n < 8; n++) {
+        bool mxye = (yexp >> n) & 1u;
+        if (!mxye) {
+            spr[n].exp_ff = true;  // Rule 1: held set while YEXP is clear
+        }
+        bool ymatch = (vic.reg[0x01 + 2 * n] == (line & 0xFF));
+        switch (bc) {
+            case 15:  // Rule 7
+                if (spr[n].exp_ff) {
+                    spr[n].mcbase = (uint8_t)((spr[n].mcbase + 2) & 0x3F);
+                }
+                break;
+            case 16:  // Rule 8
+                if (spr[n].exp_ff) {
+                    spr[n].mcbase = (uint8_t)((spr[n].mcbase + 1) & 0x3F);
+                }
+                if (spr[n].mcbase == 63) {
+                    spr[n].dma = false;
+                    spr[n].disp = false;
+                }
+                break;
+            case 55:  // Rule 2 then Rule 3 (turn-on)
+                if (mxye) {
+                    spr[n].exp_ff = !spr[n].exp_ff;
+                }
+                if (((en >> n) & 1u) && ymatch && !spr[n].dma) {
+                    spr[n].dma = true;
+                    spr[n].mcbase = 0;
+                    if (mxye) {
+                        spr[n].exp_ff = false;
+                    }
+                }
+                break;
+            case 56:  // Rule 3 (second turn-on check)
+                if (((en >> n) & 1u) && ymatch && !spr[n].dma) {
+                    spr[n].dma = true;
+                    spr[n].mcbase = 0;
+                    if (mxye) {
+                        spr[n].exp_ff = false;
+                    }
+                }
+                break;
+            case 58:  // Rule 4: display-on check
+                if (spr[n].dma && ymatch) {
+                    spr[n].disp = true;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+// Sprite contribution to the BA (RDY) line for the current cycle.
+static bool sprite_ba_low(unsigned bc) {
+    for (int n = 0; n < 8; n++) {
+        if (spr[n].dma && ((SPRITE_BA_MASK[n] >> bc) & 1u)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Per-line sprite compositing (Phase 3d): overlay the sprites on the current
+// line, resolve priority, and detect collisions. Pixels are read directly from
+// the sprite data block (equivalent to the DMA-fetched data for per-line-static
+// sprites); the cycle-exact DMA above governs bus timing and CPU stalling.
+// invariant: mid-line changes to sprite registers/data are not modelled.
+static uint8_t sc_bits[VIC_FB_WIDTH];
+static uint32_t sc_color[VIC_FB_WIDTH];
+static uint8_t sc_win[VIC_FB_WIDTH];
+
+static void sprite_composite(uint16_t line) {
+    if (line < FB_FIRST_LINE || line >= FB_FIRST_LINE + VIC_FB_HEIGHT) {
+        return;  // off-screen line
+    }
+    memset(sc_bits, 0, sizeof(sc_bits));
+    uint16_t vm = (uint16_t)((vic.reg[0x18] & 0xF0) << 6);
+    uint8_t en = vic.reg[0x15], mcr = vic.reg[0x1C], xer = vic.reg[0x1D];
+    uint8_t yer = vic.reg[0x17], msb = vic.reg[0x10];
+    bool any = false;
+
+    // Draw sprite 7 first so lower-numbered sprites overwrite (sprite 0 frontmost).
+    for (int n = 7; n >= 0; n--) {
+        if (!((en >> n) & 1u)) {
+            continue;
+        }
+        uint8_t ycoord = vic.reg[0x01 + 2 * n];
+        bool yexp = (yer >> n) & 1u;
+        unsigned height = yexp ? 42u : 21u;
+        if (line < ycoord || line >= (unsigned)ycoord + height) {
+            continue;
+        }
+        unsigned row = yexp ? (unsigned)(line - ycoord) / 2u : (unsigned)(line - ycoord);
+        uint8_t ptr = mem_vic_fetch((uint16_t)(vm + 0x3F8u + n));
+        uint16_t blk = (uint16_t)(ptr * 64u + row * 3u);
+        uint8_t d0 = mem_vic_fetch(blk), d1 = mem_vic_fetch((uint16_t)(blk + 1)),
+                d2 = mem_vic_fetch((uint16_t)(blk + 2));
+        uint32_t bits24 = ((uint32_t)d0 << 16) | ((uint32_t)d1 << 8) | d2;
+        int sx = vic.reg[0x00 + 2 * n] | (((msb >> n) & 1u) ? 256 : 0);
+        int fbx0 = sx + 8;  // sprite X 24 -> display column 0 -> fb column 32
+        bool xexp = (xer >> n) & 1u;
+        bool mc = (mcr >> n) & 1u;
+        uint32_t scol = PALETTE[vic.reg[0x27 + n] & 0x0F];
+        uint32_t mc0 = PALETTE[vic.reg[0x25] & 0x0F];
+        uint32_t mc1 = PALETTE[vic.reg[0x26] & 0x0F];
+
+        unsigned units = mc ? 12u : 24u;
+        unsigned uw = mc ? (xexp ? 4u : 2u) : (xexp ? 2u : 1u);
+        for (unsigned u = 0; u < units; u++) {
+            uint32_t color;
+            if (mc) {
+                unsigned pair = (bits24 >> (22u - 2u * u)) & 3u;
+                if (pair == 0) continue;
+                color = (pair == 1) ? mc0 : (pair == 2) ? scol : mc1;
+            } else {
+                if (!((bits24 >> (23u - u)) & 1u)) continue;
+                color = scol;
+            }
+            for (unsigned w = 0; w < uw; w++) {
+                int c = fbx0 + (int)(u * uw + w);
+                if (c < 0 || c >= (int)VIC_FB_WIDTH) continue;
+                sc_bits[c] |= (uint8_t)(1u << n);
+                sc_color[c] = color;
+                sc_win[c] = (uint8_t)n;
+                any = true;
+            }
+        }
+    }
+    if (!any) {
+        return;
+    }
+
+    // Collisions and display, per touched column.
+    uint8_t old_ss = coll_ss, old_sb = coll_sb;
+    size_t rowoff = (size_t)(line - FB_FIRST_LINE) * VIC_FB_WIDTH;
+    for (unsigned c = 0; c < VIC_FB_WIDTH; c++) {
+        uint8_t b = sc_bits[c];
+        if (!b) {
+            continue;
+        }
+        if (b & (b - 1)) {  // two or more sprites here
+            coll_ss |= b;
+        }
+        if (line_fg[c]) {
+            coll_sb |= b;
+        }
+        uint8_t w = sc_win[c];
+        bool behind_fg = (vic.reg[0x1B] >> w) & 1u;
+        if (!behind_fg || !line_fg[c]) {
+            framebuffer[rowoff + c] = sc_color[c];
+        }
+    }
+    if (old_ss == 0 && coll_ss != 0) {
+        irq_latch |= VIC_IRQ_SSCOLL;
+        vic_update_irq();
+    }
+    if (old_sb == 0 && coll_sb != 0) {
+        irq_latch |= VIC_IRQ_SBCOLL;
+        vic_update_irq();
     }
 }
 
@@ -194,6 +409,12 @@ void vic_tick(void) {
     if (line == 0 && bc == 1) {
         den_frame = false;
     }
+    if (bc == 1) {
+        memset(line_fg, 0, sizeof(line_fg));  // new line's foreground mask
+    }
+
+    // Sprite DMA/display state machine (governs sprite BA and the height cutoff).
+    sprite_dma_events(line, bc);
     if (line == BADLINE_FIRST_LINE && (vic.reg[0x11] & 0x10)) {
         den_frame = true;
     }
@@ -231,6 +452,10 @@ void vic_tick(void) {
 
     if (render_on) {
         render_cell(line, bc);
+        // Composite sprites once the line's cells are fully rendered.
+        if (bc == timing->cycles_per_line) {
+            sprite_composite(line);
+        }
     }
 
     // Bauer 3.7.2 cycle 58: only while in display state, advance RC, and at the
@@ -246,8 +471,10 @@ void vic_tick(void) {
         }
     }
 
-    // BA (RDY): pulled low during the badline bus-steal window so the CPU stalls.
-    bus_ba = (badline && bc >= BA_FIRST && bc <= BA_LAST) ? 0 : 1;
+    // BA (RDY): pulled low during the union of the badline bus-steal window and
+    // any active sprite's DMA window (single source, shared 3-cycle write grace).
+    bool ba_low = (badline && bc >= BA_FIRST && bc <= BA_LAST) || sprite_ba_low(bc);
+    bus_ba = ba_low ? 0 : 1;
 }
 
 // BA/RDY handshake: while the VIC holds the bus (bus_ba low), the CPU keeps
@@ -295,6 +522,16 @@ uint8_t vic_read(uint16_t addr) {
                              (vic_irq_pending() ? 0x80 : 0));
         case 0x1A:  // interrupt enable: bits 0-3, high bits read 1
             return (uint8_t)(irq_enable | 0xF0);
+        case 0x1E: {  // sprite-sprite collision, read-to-clear
+            uint8_t v = coll_ss;
+            coll_ss = 0;
+            return v;
+        }
+        case 0x1F: {  // sprite-background collision, read-to-clear
+            uint8_t v = coll_sb;
+            coll_sb = 0;
+            return v;
+        }
         default:
             // invariant (3b-3e): most registers gain read-side behaviour (e.g.
             // unused high bits reading as 1, latched interrupt flags) when their
