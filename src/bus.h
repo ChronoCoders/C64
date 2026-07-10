@@ -22,4 +22,9 @@ extern uint8_t bus_nmi;  // active-low
 #define BUS_IRQ_CIA1 0x02u
 void bus_irq_set(uint8_t source, bool asserted);
 
+// NMI line composition (single source of truth), mirroring the IRQ line. CIA2
+// drives it; the RESTORE key joins in a later phase. The CPU edge-detects it.
+#define BUS_NMI_CIA2 0x01u
+void bus_nmi_set(uint8_t source, bool asserted);
+
 #endif // BUS_H

@@ -3,6 +3,7 @@
 
 #include "cpu.h"
 #include "host.h"
+#include "cia.h"
 #include "mem.h"
 #include "sid.h"
 #include "vic.h"
@@ -104,6 +105,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     vic_init();
+    cia_init();
     cpu_init();
     cpu_reset();
 

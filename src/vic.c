@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bus.h"
+#include "cia.h"
 #include "cpu.h"
 #include "mem.h"
 #include "sid.h"
@@ -515,6 +516,9 @@ void vic_step(void) {
     if (cpu_should_run()) {
         cpu_tick();
     }
+    // The CIAs are clocked at phi2 every cycle (their timers must run for the
+    // Lorenz CIA tests and for KERNAL timing); they feed the IRQ/NMI lines.
+    cia_clock();
     // The SID is clocked at phi2 alongside the CPU/VIC when audio is enabled
     // (the runtime binary). This only advances SID-internal state; it never
     // touches VIC/CPU/bus state, so VIC/CPU cycle timing is unchanged. Headless

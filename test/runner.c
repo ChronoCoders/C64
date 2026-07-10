@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cia.h"
 #include "cpu.h"
 #include "mem.h"
 #include "vic.h"
@@ -392,6 +393,7 @@ int main(int argc, char **argv) {
 
     cpu_init();
     vic_init();  // the VIC drives the raster the timer tests poll via $D011/$D012
+    cia_init();
     vic_set_render(false);  // headless: skip pixel production, keep badline timing
     cpu.sp = START_SP;
     cpu.p = START_P;
