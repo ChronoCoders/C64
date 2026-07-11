@@ -2,6 +2,34 @@
 
 A cycle-accurate Commodore 64 emulator core in C. Targets PAL timing.
 
+## Status
+
+The emulator boots the real KERNAL to a `READY.` prompt and accepts keyboard
+input. Implemented so far:
+
+- 6510 CPU: full documented instruction set, cycle-accurate timing, IRQ/NMI/reset.
+- Memory: 64 KB RAM with PLA banking driven by the 6510 port; KERNAL/BASIC/Char ROM overlays.
+- VIC-II: raster timing, badlines, sprites, 40x25 text rendering, and the CIA2-selected video bank.
+- SID 6581: oscillators, waveforms, ADSR envelopes, filter, and host audio output (clean-room, no reSID).
+- CIA 6526 (both chips): timers and interrupts, the 8x8 keyboard matrix and two joysticks, the RESTORE NMI, the TOD clock, the serial shift register, and the CIA2 IEC bus lines.
+
+Regression is tracked against the Wolfgang Lorenz 6502/6510 test suite.
+
+Not yet implemented: the 1541 disk drive and IEC devices (the CIA2 bus is set up
+on the C64 side, with nothing attached yet).
+
+## Input
+
+`build/c64` maps the host keyboard, and a game controller or the numpad, onto the
+CIA1 ports:
+
+- Keyboard: two layouts, toggled at runtime with `F11`. Symbolic (the default)
+  maps by the produced character (layout-aware); positional maps by physical key
+  (authentic C64 layout). `Page Up` is RESTORE.
+- Joystick 2 (Port A): a connected game controller, or the numpad (8/2/4/6 for
+  directions, 0 or Right Ctrl for fire).
+- `F12` quits.
+
 ## Build
 
 - `make` builds the development binary (`-O0 -g`).
