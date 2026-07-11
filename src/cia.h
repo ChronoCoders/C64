@@ -27,4 +27,12 @@ uint16_t cia_timer_a(unsigned n);
 uint16_t cia_timer_b(unsigned n);
 uint8_t cia_icr_flags(unsigned n);  // current latched interrupt flags (no clear)
 
+// Keyboard matrix and joystick input (host layer and tests). The 8x8 matrix is
+// on CIA1; joystick 2 is on Port A, joystick 1 on Port B, low_mask bits 0-4 =
+// up/down/left/right/fire. RESTORE is wired to NMI, not the matrix.
+void cia_key_set(unsigned row, unsigned col, bool pressed);
+void cia_key_reset(void);
+void cia_joy_set(unsigned port, uint8_t low_mask);  // port 0 = joy1, 1 = joy2
+void cia_restore_set(bool pressed);
+
 #endif // CIA_H

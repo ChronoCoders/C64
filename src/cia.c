@@ -197,10 +197,70 @@ void cia_clock(void) {
     one_cia_clock(&cia[1]);
 }
 
+// ---- Keyboard matrix and joysticks (Phase 5b, CIA1 only) ------------------
+//
+// The C64 keyboard is an 8x8 matrix wired between CIA1 Port A (rows, driven low
+// one at a time by the KERNAL scan) and Port B (columns, read). kb_matrix[r] has
+// bit c set when the key at row r, column c is held. The joysticks share the
+// same lines: joystick 2 grounds Port A bits, joystick 1 grounds Port B bits
+// (bits 0-4 = up/down/left/right/fire). A port read is the wired composition of
+// the driven register bits, the joystick pulls, and the matrix crosspoints
+// (rows driven low pull their columns low, and columns driven low pull their
+// rows low), which is why joystick and keyboard input interfere.
+// invariant: multi-hop keyboard ghosting (phantom keys from 3+ keys bridging
+// shared rows and columns) is not modelled; single-hop matrix reads, multi-key
+// in a row, both scan directions, and joystick sharing are exact.
+static uint8_t kb_matrix[8];   // kb_matrix[row] bit col = key held
+static uint8_t joy_pull[2];    // [0] = joystick 1 (Port B), [1] = joystick 2 (Port A)
+
+// Compute the Port A and Port B pin values for CIA1 (matrix + joystick + driven).
+static void cia1_pins(uint8_t *out_pa, uint8_t *out_pb) {
+    CIA *c = &cia[0];
+    uint8_t ddra = c->reg[R_DDRA], ddrb = c->reg[R_DDRB];
+    // Output bits drive the data register; input bits float high (pull-up).
+    uint8_t pa = (uint8_t)((c->reg[R_PRA] & ddra) | (uint8_t)~ddra);
+    uint8_t pb = (uint8_t)((c->reg[R_PRB] & ddrb) | (uint8_t)~ddrb);
+    pa &= (uint8_t)~joy_pull[1];  // joystick 2 grounds Port A lines
+    pb &= (uint8_t)~joy_pull[0];  // joystick 1 grounds Port B lines
+    uint8_t row_low = (uint8_t)~pa;  // rows currently low
+    uint8_t col_low = (uint8_t)~pb;  // columns currently low
+    for (unsigned r = 0; r < 8; r++) {
+        if (row_low & (1u << r)) {
+            pb &= (uint8_t)~kb_matrix[r];  // a low row pulls its held columns low
+        }
+        for (unsigned col = 0; col < 8; col++) {
+            if ((col_low & (1u << col)) && (kb_matrix[r] & (1u << col))) {
+                pa &= (uint8_t)~(1u << r);  // a low column pulls its held rows low
+            }
+        }
+    }
+    *out_pa = pa;
+    *out_pb = pb;
+}
+
+// The read of a CIA1 port: output bits read back the data register, input bits
+// read the pin (matrix/joystick) state.
+static uint8_t cia1_read_port(unsigned r) {
+    uint8_t pa, pb;
+    cia1_pins(&pa, &pb);
+    if (r == R_PRA) {
+        return (uint8_t)((cia[0].reg[R_PRA] & cia[0].reg[R_DDRA]) |
+                         (pa & (uint8_t)~cia[0].reg[R_DDRA]));
+    }
+    return (uint8_t)((cia[0].reg[R_PRB] & cia[0].reg[R_DDRB]) |
+                     (pb & (uint8_t)~cia[0].reg[R_DDRB]));
+}
+
 // ---- Register access ------------------------------------------------------
 
 static uint8_t cia_reg_read(CIA *c, unsigned r) {
     switch (r) {
+        case R_PRA:
+        case R_PRB:
+            if (c == &cia[0]) {
+                return cia1_read_port(r);  // CIA1 ports carry the keyboard/joystick
+            }
+            return c->reg[r];
         case R_TALO:
             return (uint8_t)(c->ta.counter & 0xFFu);
         case R_TAHI:
@@ -287,10 +347,36 @@ uint16_t cia_timer_a(unsigned n) { return cia[n & 1u].ta.counter; }
 uint16_t cia_timer_b(unsigned n) { return cia[n & 1u].tb.counter; }
 uint8_t cia_icr_flags(unsigned n) { return (uint8_t)(cia[n & 1u].icr_data & 0x1Fu); }
 
+// ---- Keyboard / joystick input (host and tests) ---------------------------
+
+void cia_key_set(unsigned row, unsigned col, bool pressed) {
+    if (row >= 8 || col >= 8) {
+        return;
+    }
+    if (pressed) {
+        kb_matrix[row] |= (uint8_t)(1u << col);
+    } else {
+        kb_matrix[row] &= (uint8_t)~(1u << col);
+    }
+}
+
+void cia_key_reset(void) { memset(kb_matrix, 0, sizeof(kb_matrix)); }
+
+void cia_joy_set(unsigned port, uint8_t low_mask) {
+    joy_pull[port & 1u] = (uint8_t)(low_mask & 0x1Fu);
+}
+
+void cia_restore_set(bool pressed) {
+    bus_nmi_set(BUS_NMI_RESTORE, pressed);  // RESTORE is wired to NMI, not the matrix
+}
+
 // ---- Lifecycle ------------------------------------------------------------
 
 void cia_reset(void) {
     memset(cia, 0, sizeof(cia));
+    memset(kb_matrix, 0, sizeof(kb_matrix));
+    joy_pull[0] = 0;
+    joy_pull[1] = 0;
     cia[1].nmi_source = BUS_NMI_CIA2;
     cia[0].ta.latch = cia[0].tb.latch = 0xFFFF;
     cia[1].ta.latch = cia[1].tb.latch = 0xFFFF;
@@ -300,6 +386,7 @@ void cia_reset(void) {
     // release this CIA's contribution to the wired-OR IRQ/NMI lines.
     bus_irq_set(BUS_IRQ_CIA1, false);
     bus_nmi_set(BUS_NMI_CIA2, false);
+    bus_nmi_set(BUS_NMI_RESTORE, false);
 }
 
 void cia_init(void) { cia_reset(); }
