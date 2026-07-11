@@ -274,6 +274,56 @@ static void test_filter_digital_control_path(void) {
     CHECK_EQ(sid_direct_output(), 0, "voice2 leaves the direct path when 3OFF is set");
 }
 
+// Drive the free-running rate counter to value C under a slow attack rate, then
+// switch to a fast rate (period P2) and count clocks to the next envelope step.
+// Returns the delay-bug stall.
+static long delay_bug_stall(int rate_slow, int rate_fast, uint16_t C) {
+    sid_reset();
+    sid_write(R_V0_AD, (uint8_t)((rate_slow & 0x0F) << 4));  // attack nibble = slow rate
+    sid_write(R_V0_CTRL, CTRL_SAW | CTRL_GATE);              // gate on -> attack state
+    for (int i = 0; i < 200000; i++) {
+        sid_clock();
+        if (sid_voice_rate_counter(0) == C) { break; }
+    }
+    uint8_t e0 = sid_voice_envelope(0);
+    sid_write(R_V0_AD, (uint8_t)((rate_fast & 0x0F) << 4));  // change to the smaller period
+    for (long n = 1; n <= 40000; n++) {
+        sid_clock();
+        if (sid_voice_envelope(0) != e0) { return n; }
+    }
+    return -1;
+}
+
+// Test: the ADSR delay-bug stall follows stall = 32768 - (C - P2), where C is the
+// rate counter at the register change and P2 is the new period.
+//
+// SOURCE NOTE: these stall values are MEASURED from this implementation's
+// free-running counter (reset only on an equality match; behaviour sourced to
+// ChristopherJam's real-chip reverse-engineering, corroborated by Geir Tjelta).
+// The exact wrap length is NOT a datasheet or hardware figure and has no such
+// citation: whether the hardware counter is linear or a 15-bit LFSR is unsettled,
+// and the exact wrap length would differ between them. These assertions pin THIS
+// model's behaviour so the number cannot drift silently again.
+static void test_adsr_delay_bug_stall(void) {
+    // P2 = RATE_PERIOD[0] = 9, the fastest rate period (datasheet-derived). Reach
+    // the target counter under rate 15 (the slowest, so C is reachable).
+    const int P2 = 9;
+    // Worst case: C = P2. The compare is after the increment, so the current value
+    // is missed and the counter must wrap the full 32768.
+    CHECK_EQ(delay_bug_stall(15, 0, (uint16_t)P2), 32768,
+             "delay-bug worst case at C = P2 is 32768 (measured, this model)");
+    // Classic delay bug: counter one above the new period.
+    CHECK_EQ(delay_bug_stall(15, 0, (uint16_t)(P2 + 1)), 32767,
+             "delay-bug stall at C = P2+1 is 32767 (measured)");
+    CHECK_EQ(delay_bug_stall(15, 0, (uint16_t)(P2 + 2)), 32766,
+             "delay-bug stall at C = P2+2 is 32766 (measured, formula holds)");
+    // 32477 is NOT special: it is simply the stall at C - P2 = 291, one ordinary
+    // point on the same formula. Included only to nail that it is not the worst
+    // case (which is 32768 above), correcting the Phase 4b mislabel.
+    CHECK_EQ(delay_bug_stall(15, 0, (uint16_t)(P2 + 291)), 32477,
+             "C - P2 = 291 gives 32477: an ordinary point, not the worst case");
+}
+
 int main(void) {
     TEST_BEGIN("sid");
     test_noise_first_output_is_fe();
@@ -284,5 +334,6 @@ int main(void) {
     test_sustain_level_is_nibble_times_17();
     test_master_volume_scales_output_linearly();
     test_filter_digital_control_path();
+    test_adsr_delay_bug_stall();
     return TEST_SUMMARY("sid");
 }

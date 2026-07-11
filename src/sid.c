@@ -66,18 +66,28 @@ static uint8_t reg[0x20];  // $D400-$D41F register file (writes land in 0x00-0x1
 // Sources (independent of reSID):
 //   Rate periods derive from the MOS 6581 datasheet attack/decay/release times
 //   (stated on a 1.0 MHz phi2 basis; a full 255-step attack at period P takes
-//   255*P clocks). The documented ADSR "delay bug" fixes the rate counter at 15
-//   bits: a register change to a smaller period leaves the counter above it, so
-//   it must wrap the full 32768 steps before matching again. Every rate period
-//   therefore fits 15 bits; the datasheet's slowest attack (8 s) gives ~31250,
-//   inside that. Exponential decay/release breakpoints (envelope 93/54/26/14/6
+//   255*P clocks). The rate counter is free-running: it is reset only on an
+//   equality match with the current period, never on a gate change or a
+//   register write (ChristopherJam's real-chip reverse-engineering on CSDb,
+//   corroborated by Geir Tjelta). Both the gate phase carry-over and the ADSR
+//   delay bug follow from that one rule: a change to a smaller period leaves the
+//   counter above the new value, so it wraps before matching again. The stall is
+//   32768 - (C - P2) for counter C and new period P2, worst case 32768 at C = P2
+//   (the compare is after the increment, so the current value is missed). That
+//   figure is measured from this implementation (see the delay-bug test), not a
+//   datasheet or hardware value. Whether the hardware counter is a linear counter
+//   or a 15-bit LFSR is not settled by the independent sources: the behavior
+//   class is identical and only the exact wrap length would differ (a 15-bit LFSR
+//   has period 32767), so this is a bounded invariant, not a proven fact about
+//   the chip. Every rate period fits 15 bits; the datasheet's slowest attack
+//   (8 s) gives ~31250, inside that. Exponential decay/release breakpoints (envelope 93/54/26/14/6
 //   -> divider 2/4/8/16/30, and 1 above 93) are the measured 6581R3 values
 //   reported by Laurent Plogue, "SID 6581R3 ADSR tables, up close"; they also
 //   reproduce the datasheet's 3:1 decay-to-attack ratio (a full 255->0 decay is
 //   756 rate ticks versus 255 for attack). reSID was not consulted.
 // invariant: the datasheet high-rate times are its own nominal figures; some
 //   emulators use longer measured high-rate periods. The values here reproduce
-//   the datasheet and stay within the documented 15-bit counter.
+//   the datasheet and stay within the 15-bit rate counter modelled here.
 
 #define REG_AD(v) (7u * (v) + 5u)  // attack (high nibble) / decay (low nibble)
 #define REG_SR(v) (7u * (v) + 6u)  // sustain (high nibble) / release (low nibble)
@@ -298,9 +308,12 @@ static uint8_t env_sustain_level(unsigned v) {
 
 static void envelope_clock(unsigned v) {
     Env *e = &env[v];
-    // 15-bit rate counter with exact-equality compare: the ADSR delay bug. A
-    // register change to a smaller period leaves the counter above it, so the
-    // counter wraps the full 32768 steps before matching again.
+    // Free-running 15-bit rate counter, reset only on an exact-equality match
+    // with the period (not on gate or register writes): the source of the ADSR
+    // delay bug. After a change to a smaller period the stall is 32768 - (C - P2),
+    // worst case 32768 at C = P2 (compare is after the increment). Measured from
+    // this model (see the delay-bug test); linear vs 15-bit LFSR is unsettled, so
+    // the exact wrap length is a bounded invariant, not a proven fact.
     e->rate_counter = (uint16_t)((e->rate_counter + 1u) & ENV_RATE_MASK);
     if (e->rate_counter != RATE_PERIOD[env_rate_value(v)]) {
         return;
