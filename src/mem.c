@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cia.h"
 #include "cpu.h"
 
 // The 64 KB RAM underlies the whole map. ROM is a read overlay banked in per the
@@ -20,15 +21,16 @@ void mem_init(void) {
 uint8_t mem_read(uint16_t addr) { return ram[addr]; }
 
 uint8_t mem_vic_fetch(uint16_t addr) {
-    // The VIC reads memory directly (unbanked). In bank 0 the Character ROM is
-    // mapped into its view at $1000-$1FFF; everything else is RAM. CIA2-driven
-    // bank selection arrives in Phase 5, so bank 0 (the KERNAL boot default) is
-    // hardcoded here.
-    addr &= 0x3FFF;  // the VIC addresses a 16 KB bank
-    if (addr >= 0x1000 && addr < 0x2000) {
-        return rom_char[addr & 0x0FFF];
+    // The VIC reads memory directly (unbanked) from the 16 KB bank selected by
+    // CIA2 Port A. The Character ROM appears in its view at local $1000-$1FFF in
+    // the even banks (0 and 2, where VA14 is low); everything else is RAM. The
+    // boot default is bank 0, so this matches the prior hardcoded behavior.
+    uint8_t bank = cia2_vic_bank();
+    uint16_t local = (uint16_t)(addr & 0x3FFF);
+    if (local >= 0x1000 && local < 0x2000 && (bank & 1u) == 0) {
+        return rom_char[local & 0x0FFF];
     }
-    return ram[addr];
+    return ram[(uint16_t)((bank << 14) | local)];
 }
 
 void mem_write(uint16_t addr, uint8_t val) { ram[addr] = val; }
