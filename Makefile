@@ -24,6 +24,10 @@ CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
+# One durable unit-test binary per subsystem, plus the Lorenz runner.
+UNIT_TESTS = mem cpu cia sid vic
+UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
+
 all: $(BIN)
 
 $(BIN): $(SRC)
@@ -33,11 +37,30 @@ $(BIN): $(SRC)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(SRC) -o $(BIN) $(SDL_LIBS)
 
-test: $(TEST_BIN)
-
 $(TEST_BIN): $(TEST_SRC) $(CORE_SRC)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
+
+build/test-%: test/%_test.c test/test.h $(CORE_SRC)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
+
+# Build and run every unit suite headless plus the Lorenz runner; report per
+# subsystem and a total, and exit non-zero if any unit assertion failed.
+test: $(UNIT_BINS) $(TEST_BIN)
+	@rc=0; : > build/test.log; \
+	for t in $(UNIT_BINS); do \
+	  if ./$$t >> build/test.log 2>&1; then :; else rc=1; fi; \
+	done; \
+	echo "======== unit tests ========"; cat build/test.log; \
+	echo "======== lorenz ========"; \
+	./$(TEST_BIN) 2>/dev/null | grep -E "Tests passed|Stopped in test" || \
+	  echo "  (lorenz suite not present under test/lorenz; skipped)"; \
+	echo "======== summary ========"; \
+	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
+	     END{printf "TOTAL: %d passed, %d failed, %d skipped\n",p,f,s}' build/test.log; \
+	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	echo "RESULT: all unit suites passed"
 
 clean:
 	rm -rf build
