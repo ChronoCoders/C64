@@ -123,8 +123,8 @@ static Env env[3];
 //   plausible choice for the 6581's mild resonance, not measured.
 // invariant: the 6581 analog distortion / component non-linearity ("grit") is
 //   approximated by the linear SVF, not modeled at the transistor level.
-// invariant: the voice DC offset and mixer non-linearity are deferred to the
-//   Phase 4d mix (voices are centered on 0x800 here).
+// invariant: the per-voice DC offset and mixer non-linearity are not modelled;
+//   voices are centered on 0x800 here.
 //
 // $D417 low nibble routes voices/external into the filter (bit v -> voice v,
 // bit 3 -> external in). $D418 bits 4/5/6 select LP/BP/HP, bit 7 cuts voice 3
@@ -481,8 +481,8 @@ uint8_t sid_read(uint16_t addr) {
             return (uint8_t)(voice_output(2) >> 4);
         case 0x1C:  // ENV3: voice 3 envelope output
             return env[2].envelope;
-        case 0x19:  // POTX (Phase 5+)
-        case 0x1A:  // POTY (Phase 5+)
+        case 0x19:  // POTX (paddle X, not modelled)
+        case 0x1A:  // POTY (paddle Y, not modelled)
         default:    // write-only control registers read as 0
             return 0x00;
     }

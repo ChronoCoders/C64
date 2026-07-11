@@ -58,7 +58,8 @@ MemRegion mem_region_table[16];
 
 // Resolve the configuration into the routing table. Truth table per the
 // standard C64 no-cartridge case (/GAME=/EXROM=1); cartridge lines are the
-// extension point for Phase 6. Source: C64 PLA / c64-wiki "Bank Switching".
+// extension point for future cartridge support. Source: C64 PLA / c64-wiki
+// "Bank Switching".
 void mem_update_config(void) {
     uint8_t lines = port_lines();
     bool loram = (lines & 0x01) != 0;

@@ -36,9 +36,9 @@ void bus_nmi_set(uint8_t source, bool asserted) {
     bus_nmi = nmi_sources ? 0 : 1;
 }
 
-// Open-bus stub for the I/O chips not yet implemented (CIA $DC00, etc.). Reads
-// return $00 (a deterministic open-bus stand-in; a last-bus-value model can
-// replace it when the chips land). Writes are swallowed.
+// Open-bus stub for the $DE00-$DFFF expansion I/O area (I/O1/I/O2), which has no
+// device attached. Reads return $00 (a deterministic open-bus stand-in; a
+// last-bus-value model can replace it). Writes are swallowed.
 static uint8_t io_read(uint16_t addr) {
     (void)addr;
     return 0x00;

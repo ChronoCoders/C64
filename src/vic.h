@@ -2,8 +2,9 @@
 //! cycle-within-line counters, the $D000-$D02E register file, the live
 //! $D011/$D012 raster semantics, and per-cycle text-mode rendering into the
 //! framebuffer. It advances one cycle per phi2 and drives the CPU (vic_step),
-//! stalling it on badlines (BA/RDY). Sprites and raster interrupts are 3d/3e;
-//! the raster-compare latch is stored but never fires an IRQ yet.
+//! stalling it on badlines (BA/RDY). Sprites (DMA, per-sprite BA windows, and
+//! per-cycle compositing), the raster-compare interrupt, and sprite collisions
+//! are implemented.
 #ifndef VIC_H
 #define VIC_H
 
@@ -28,7 +29,7 @@ typedef struct {
 typedef struct {
     uint16_t raster_line;   // current raster line, 0..lines_per_frame-1
     uint16_t raster_cycle;  // current cycle within the line, 0..cycles_per_line-1
-    uint16_t raster_compare;  // 9-bit latch: $D012 | ($D011.7 << 8). IRQ is 3e.
+    uint16_t raster_compare;  // 9-bit latch: $D012 | ($D011.7 << 8); drives the raster IRQ
     uint8_t reg[VIC_NUM_REGS];
 } VIC;
 
@@ -41,8 +42,8 @@ void vic_reset(void);
 void vic_tick(void);
 
 // One machine cycle: VIC acts, then the CPU steps. This ordering (VIC before
-// CPU) is the single source of truth for CPU/VIC synchronisation; later phases
-// (badline BA/RDY, sprite DMA) depend on it.
+// CPU) is the single source of truth for CPU/VIC synchronisation; the badline
+// BA/RDY stall and sprite DMA depend on it.
 void vic_step(void);
 
 // Run exactly one PAL frame (cycles_per_frame machine cycles).

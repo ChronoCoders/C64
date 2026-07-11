@@ -93,13 +93,13 @@ static bool render_on = true;
 // (it can complete write cycles), then halts until the VIC releases the bus.
 static int stall_grace = STALL_GRACE_CYCLES;
 
-// Interrupt sources: $D019 latch and $D01A enable, bits 0-3. Only the raster
-// source (bit 0) is active now; the sprite-collision (bits 1,2) and light-pen
-// (bit 3) positions exist but are inert until Phase 3d / out of scope.
+// Interrupt sources: $D019 latch and $D01A enable, bits 0-3. The raster source
+// (bit 0) and both sprite-collision sources (bits 1,2) are active; the light-pen
+// source (bit 3) is not modelled and stays inert.
 #define VIC_IRQ_RASTER 0x01u
-#define VIC_IRQ_SBCOLL 0x02u  // sprite-background collision (3d, inert)
-#define VIC_IRQ_SSCOLL 0x04u  // sprite-sprite collision (3d, inert)
-#define VIC_IRQ_LP 0x08u      // light pen (out of scope, inert)
+#define VIC_IRQ_SBCOLL 0x02u  // sprite-background collision
+#define VIC_IRQ_SSCOLL 0x04u  // sprite-sprite collision
+#define VIC_IRQ_LP 0x08u      // light pen (not modelled, inert)
 static uint8_t irq_latch;   // $D019: sources that have latched
 static uint8_t irq_enable;  // $D01A: sources allowed to pull IRQ low
 
@@ -562,9 +562,9 @@ uint8_t vic_read(uint16_t addr) {
             return v;
         }
         default:
-            // invariant (3b-3e): most registers gain read-side behaviour (e.g.
-            // unused high bits reading as 1, latched interrupt flags) when their
-            // function lands. In 3a they read back their stored value.
+            // Registers with read-side behaviour (the live raster counter, the
+            // interrupt latch, the collision registers) are handled above; the
+            // rest read back their stored value.
             return vic.reg[r];
     }
 }
@@ -594,8 +594,8 @@ void vic_write(uint16_t addr, uint8_t val) {
 }
 
 uint8_t vic_color_read(uint16_t addr) {
-    // Real hardware returns the low nibble with open-bus junk in the high nibble;
-    // 3b returns just the stored nibble.
+    // invariant: real hardware returns the low nibble with open-bus junk in the
+    // high nibble; that high-nibble junk is not modelled, only the stored nibble.
     return (uint8_t)(color_ram[addr & 0x3FF] & 0x0F);
 }
 

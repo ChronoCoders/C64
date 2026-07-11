@@ -15,9 +15,9 @@
 // C64 emulator entry point. By default it opens an SDL2 window, boots the real
 // ROMs, and runs frames continuously, presenting each rendered frame. With
 // --headless it runs the same machine without a display and reports where the
-// CPU settles (useful where no display is available). VIC pixels render in
-// standard text mode; the CIA (keyboard, Phase 5) is not present, so the machine
-// reaches the READY prompt and idles in the keyboard-input loop.
+// CPU settles (useful where no display is available). The full machine (CPU,
+// VIC, SID, both CIAs, and the 1541 drive when its ROM is present) runs; the
+// KERNAL boots to the READY prompt and idles in the keyboard-input loop.
 
 #define KERNAL_PATH "rom/kernal.rom"
 #define BASIC_PATH "rom/basic.rom"

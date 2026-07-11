@@ -16,7 +16,7 @@ extern uint8_t bus_nmi;  // active-low
 
 // IRQ line composition (single source of truth). Each chip reports whether it
 // is currently pulling the wired-OR IRQ line low; bus_irq is the OR of them.
-// Phase 5 adds CIA1 without reworking this.
+// CIA1 shares this composition; adding it required no rework here.
 #include <stdbool.h>
 #define BUS_IRQ_VIC 0x01u
 #define BUS_IRQ_CIA1 0x02u

@@ -20,7 +20,7 @@ const char *host_error(void);
 void host_present(const uint32_t *framebuffer);
 
 // Pump the event queue; returns true if the user requested quit (window close
-// or Escape). No C64 keyboard emulation here; that is Phase 5 (CIA).
+// or F12). Also maps the host keyboard and joystick onto the CIA1 matrix.
 bool host_poll(void);
 
 void host_shutdown(void);
