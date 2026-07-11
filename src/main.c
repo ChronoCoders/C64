@@ -4,6 +4,7 @@
 #include "cpu.h"
 #include "host.h"
 #include "cia.h"
+#include "drive.h"
 #include "mem.h"
 #include "sid.h"
 #include "vic.h"
@@ -21,6 +22,7 @@
 #define KERNAL_PATH "rom/kernal.rom"
 #define BASIC_PATH "rom/basic.rom"
 #define CHAR_PATH "rom/chargen.rom"
+#define DRIVE_ROM_PATH "rom/1541.rom"
 #define WINDOW_TITLE "Commodore 64"
 
 #define HEADLESS_FRAMES 200u
@@ -60,6 +62,7 @@ static int run_visible(void) {
     }
     while (!host_poll()) {
         vic_run_frame();  // per-cycle rendering fills the framebuffer as it runs
+        drive_run_phi2(vic_cycles_per_frame());  // step the drive in its own domain
         if (audio) {
             int16_t abuf[2048];
             unsigned n;
@@ -82,6 +85,7 @@ static int run_headless(void) {
     uint16_t hi = cpu.pc;
     for (unsigned f = 0; f < HEADLESS_FRAMES; f++) {
         vic_run_frame();
+        drive_run_phi2(vic_cycles_per_frame());  // step the drive in its own domain
         if (cpu.pc < lo) {
             lo = cpu.pc;
         }
@@ -108,6 +112,15 @@ int main(int argc, char **argv) {
     cia_init();
     cpu_init();
     cpu_reset();
+
+    drive_init();
+    if (drive_load_rom(DRIVE_ROM_PATH)) {
+        drive_reset();
+        printf("1541: DOS ROM loaded; drive attached (1.0 MHz, own bus).\n");
+    } else {
+        printf("1541: no DOS ROM at %s; drive not attached, C64 runs normally.\n",
+               DRIVE_ROM_PATH);
+    }
 
     if (argc > 1 && strcmp(argv[1], "--headless") == 0) {
         return run_headless();

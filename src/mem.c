@@ -40,14 +40,14 @@ void mem_write(uint16_t addr, uint8_t val) { ram[addr] = val; }
 // control lines are pulled up. So the power-on state (DDR=0) banks in the ROMs,
 // matching a hardware reset.
 static uint8_t port_lines(void) {
-    return (uint8_t)(((cpu.port_dir & cpu.port_data) | (uint8_t)~cpu.port_dir) &
+    return (uint8_t)(((cpu_port_dir & cpu_port_data) | (uint8_t)~cpu_port_dir) &
                      0x07);
 }
 
 // Read-back of the port data register ($01): output bits return the latched
 // data, input bits read high (pull-up; no peripherals are modelled).
 static uint8_t port_data_read(void) {
-    return (uint8_t)((cpu.port_data & cpu.port_dir) | (uint8_t)~cpu.port_dir);
+    return (uint8_t)((cpu_port_data & cpu_port_dir) | (uint8_t)~cpu_port_dir);
 }
 
 // Routing table, one entry per 4 KB slot, indexed by the top nibble of the
@@ -84,7 +84,7 @@ void mem_update_config(void) {
 
 uint8_t mem_banked_read(uint16_t addr) {
     if (addr == 0x0000) {
-        return cpu.port_dir;
+        return cpu_port_dir;
     }
     if (addr == 0x0001) {
         return port_data_read();
@@ -105,12 +105,12 @@ uint8_t mem_banked_read(uint16_t addr) {
 
 void mem_banked_write(uint16_t addr, uint8_t val) {
     if (addr == 0x0000) {
-        cpu.port_dir = val;
+        cpu_port_dir = val;
         mem_update_config();  // banking follows the port
         return;
     }
     if (addr == 0x0001) {
-        cpu.port_data = val;
+        cpu_port_data = val;
         mem_update_config();
         return;
     }

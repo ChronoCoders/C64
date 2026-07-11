@@ -399,8 +399,8 @@ int main(int argc, char **argv) {
     cpu.p = START_P;
     // The Lorenz bench runs in an all-RAM configuration: drive LORAM/HIRAM/CHAREN
     // low (outputs) so no ROM or I/O is banked in and the whole 64 KB is RAM.
-    cpu.port_dir = 0x07;
-    cpu.port_data = 0x00;
+    cpu_port_dir = 0x07;
+    cpu_port_data = 0x00;
     mem_update_config();
 
     if (!load_test(ENTRY_FILE)) {
