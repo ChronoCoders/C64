@@ -5,6 +5,7 @@
 #include "host.h"
 #include "cia.h"
 #include "drive.h"
+#include "iec.h"
 #include "mem.h"
 #include "sid.h"
 #include "vic.h"
@@ -61,8 +62,7 @@ static int run_visible(void) {
                host_error());
     }
     while (!host_poll()) {
-        vic_run_frame();  // per-cycle rendering fills the framebuffer as it runs
-        drive_run_phi2(vic_cycles_per_frame());  // step the drive in its own domain
+        iec_step_frame();  // C64 and drive interleaved per cycle over the serial bus
         if (audio) {
             int16_t abuf[2048];
             unsigned n;
@@ -84,8 +84,7 @@ static int run_headless(void) {
     uint16_t lo = cpu.pc;
     uint16_t hi = cpu.pc;
     for (unsigned f = 0; f < HEADLESS_FRAMES; f++) {
-        vic_run_frame();
-        drive_run_phi2(vic_cycles_per_frame());  // step the drive in its own domain
+        iec_step_frame();  // C64 and drive interleaved per cycle over the serial bus
         if (cpu.pc < lo) {
             lo = cpu.pc;
         }
@@ -114,6 +113,7 @@ int main(int argc, char **argv) {
     cpu_reset();
 
     drive_init();
+    iec_reset();
     if (drive_load_rom(DRIVE_ROM_PATH)) {
         drive_reset();
         printf("1541: DOS ROM loaded; drive attached (1.0 MHz, own bus).\n");

@@ -18,18 +18,24 @@
 #define DRIVE_ROM_SIZE 0x4000u
 
 // IEC lines pulled low by an external device (the C64 in Phase 6c); the drive
-// composes its own drive with these. Zero here, so with nothing attached the
-// open-collector lines idle high.
-#define IEC_DATA 0x01u
-#define IEC_CLK 0x02u
+// composes its own drive with these. The bit convention matches the C64 side's
+// IEC_PULL_CLK/DATA/ATN (cia.h) so the shared wired-AND bus passes masks straight
+// through. Zero when nothing is attached, so the open-collector lines idle high.
+#define IEC_CLK 0x01u
+#define IEC_DATA 0x02u
 #define IEC_ATN 0x04u
 
 // VIA1 port B ($1800), the serial bus (1541 schematic): PB0 DATA in, PB1 DATA
 // out, PB2 CLK in, PB3 CLK out, PB4 ATNA out, PB5/PB6 device-number jumpers, PB7
-// ATN in. A driven OUT bit pulls its line low (open-collector). CA1 is ATN in.
+// ATN in. A driven OUT bit pulls its line low (open-collector). The serial IN
+// lines pass through inverting buffers, so PB0/PB2/PB7 read 1 when their line is
+// low; ATN also reaches CA1 (inverted), where the DOS interrupts on the rising
+// edge (ATN going low). Intact device jumpers ground PB5/PB6, so device 8 reads
+// PB5=PB6=0; cutting a jumper raises the bit and the device number.
 #define V1_DATA_OUT 0x02u
 #define V1_CLK_OUT 0x08u
-#define V1_JUMPERS 0x60u  // PB5,PB6 high = default device 8
+#define V1_ATNA 0x10u     // PB4 ATN acknowledge
+#define V1_JUMPERS 0x60u  // PB5,PB6 device-number jumpers
 
 static CPU6502 drive;
 static uint8_t drive_ram[DRIVE_RAM_SIZE];
@@ -43,18 +49,19 @@ static bool rom_loaded;
 static uint64_t cycle_count;
 static uint64_t phi2_acc;
 
-// The DATA and CLK lines are low if the drive drives its OUT bit or an external
-// device pulls them; ATN is driven only by the controller. PB5/PB6 read the
-// device jumpers (default device 8). PB0/PB2/PB7 read the composed lines.
+// A DATA or CLK line is low if the drive drives its OUT bit or the external bus
+// pulls it; ATN is driven only by the controller. The serial IN lines are
+// inverted (PB0/PB2/PB7 read 1 when their line is low), and the device jumpers
+// ground PB5/PB6 (device 8). Source: 1541 schematic serial-bus wiring.
 static void compose_via1_ports(void) {
     bool data_low = ((via1.orb & via1.ddrb & V1_DATA_OUT) != 0) || (iec_ext & IEC_DATA);
     bool clk_low = ((via1.orb & via1.ddrb & V1_CLK_OUT) != 0) || (iec_ext & IEC_CLK);
     bool atn_low = (iec_ext & IEC_ATN) != 0;
-    uint8_t pb = 0xFFu;
-    if (data_low) { pb &= (uint8_t)~0x01u; }  // PB0 DATA in
-    if (clk_low) { pb &= (uint8_t)~0x04u; }   // PB2 CLK in
-    if (atn_low) { pb &= (uint8_t)~0x80u; }   // PB7 ATN in
-    pb = (uint8_t)((pb & ~V1_JUMPERS) | V1_JUMPERS);  // jumpers high (device 8)
+    uint8_t pb = 0x00u;
+    if (data_low) { pb |= 0x01u; }  // PB0 DATA in (inverted: 1 when line low)
+    if (clk_low) { pb |= 0x04u; }   // PB2 CLK in (inverted)
+    if (atn_low) { pb |= 0x80u; }   // PB7 ATN in (inverted)
+    pb = (uint8_t)(pb & ~V1_JUMPERS);  // jumpers grounded low = default device 8
     via1.pb_in = pb;
 }
 
@@ -116,6 +123,10 @@ static void drive_write(void *ctx, uint16_t addr, uint8_t val) {
     // ROM and unmapped: writes ignored.
 }
 
+void drive_bus_poke(uint16_t addr, uint8_t val) {
+    drive_write(NULL, addr, val);
+}
+
 void drive_init(void) {
     memset(drive_ram, 0, sizeof(drive_ram));
     via_reset(&via1);
@@ -158,9 +169,11 @@ bool drive_load_rom(const char *path) {
 bool drive_present(void) { return rom_loaded; }
 
 void drive_tick(void) {
-    // ATN arrives on VIA1 CA1; with no controller attached it idles high, so no
-    // edge fires. BYTE READY on VIA2 CA1 is inert until a disk exists (Phase 6d).
-    via_set_ca1(&via1, (iec_ext & IEC_ATN) == 0);
+    // ATN reaches VIA1 CA1 inverted: CA1 is high when ATN is asserted (the C64
+    // pulls it low), so the C64 asserting ATN is a rising edge, which the DOS
+    // interrupts on to leave its idle loop. BYTE READY on VIA2 CA1 is inert until
+    // a disk exists (Phase 6d).
+    via_set_ca1(&via1, (iec_ext & IEC_ATN) != 0);
     via_step(&via1);
     via_step(&via2);
     drive.irq_line = (via_irq(&via1) || via_irq(&via2)) ? 0 : 1;  // active-low
@@ -195,6 +208,7 @@ uint8_t drive_via_orb(unsigned n) { return via_of(n)->orb; }
 uint8_t drive_via_ddrb(unsigned n) { return via_of(n)->ddrb; }
 uint8_t drive_via_ier(unsigned n) { return via_of(n)->ier; }
 uint8_t drive_via_ifr(unsigned n) { return via_of(n)->ifr; }
+uint8_t drive_via_pcr(unsigned n) { return via_of(n)->pcr; }
 
 uint8_t drive_via_pb(unsigned n) {
     if (n == 1) { compose_via1_ports(); } else { compose_via2_ports(); }
@@ -203,3 +217,24 @@ uint8_t drive_via_pb(unsigned n) {
 }
 
 int drive_head_halftrack(void) { return head_halftrack; }
+
+// The lines the drive pulls low, in the shared IEC_PULL_* convention: DATA out
+// (VIA1 PB1) and CLK out (PB3), plus the ATN acknowledge hardware, which pulls
+// DATA low when ATN is asserted and the drive has not yet acknowledged via ATNA
+// (PB4). The drive never drives ATN. Source: 1541 schematic serial-bus wiring.
+uint8_t drive_iec_out(void) {
+    uint8_t out = (uint8_t)(via1.orb & via1.ddrb);
+    uint8_t m = 0;
+    if (out & V1_DATA_OUT) { m |= IEC_DATA; }
+    if (out & V1_CLK_OUT) { m |= IEC_CLK; }
+    bool atn_asserted = (iec_ext & IEC_ATN) != 0;
+    bool atna = (out & V1_ATNA) != 0;
+    if (atn_asserted && !atna) { m |= IEC_DATA; }  // auto-acknowledge attention
+    return m;
+}
+
+// Set what the external bus (the C64) pulls low; the drive's VIA1 read and its
+// ATN CA1 interrupt see this on the next tick.
+void drive_set_iec_ext(uint8_t mask) {
+    iec_ext = (uint8_t)(mask & (IEC_CLK | IEC_DATA | IEC_ATN));
+}

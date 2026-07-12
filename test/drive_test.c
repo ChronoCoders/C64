@@ -141,9 +141,12 @@ static void test_real_dos_boot(void) {
              "VIA1 CA1 (ATN) interrupt enabled: the idle loop is waiting on ATN");
     CHECK_EQ(drive_via_ier(2) & VIA_IRQ_T1, VIA_IRQ_T1, "VIA2 Timer 1 interrupt enabled");
     CHECK_EQ(drive_via_pb(2) & 0x04u, 0, "VIA2 motor (PB2) off at idle");
-    CHECK_EQ(drive_via_pb(1) & 0x01u, 0x01u, "VIA1 DATA in idle high (line not pulled)");
-    CHECK_EQ(drive_via_pb(1) & 0x04u, 0x04u, "VIA1 CLK in idle high (line not pulled)");
-    CHECK_EQ(drive_via_pb(1) & 0x60u, 0x60u, "VIA1 device-number jumpers read device 8");
+    // The serial IN lines are inverting, so an idle (high, unpulled) line reads 0,
+    // and the intact device jumpers ground PB5/PB6 (device 8). This polarity is the
+    // one the serial handshake actually uses (see the iec suite / 1541 schematic).
+    CHECK_EQ(drive_via_pb(1) & 0x01u, 0, "VIA1 DATA in reads 0 for an idle (high) line");
+    CHECK_EQ(drive_via_pb(1) & 0x04u, 0, "VIA1 CLK in reads 0 for an idle (high) line");
+    CHECK_EQ(drive_via_pb(1) & 0x60u, 0, "VIA1 device jumpers grounded: device 8");
 
     int nz = 0;
     for (int a = 0; a < 0x0800; a++) { if (drive_ram_peek((uint16_t)a)) { nz++; } }

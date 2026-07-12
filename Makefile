@@ -21,12 +21,12 @@ BIN = build/c64
 
 # Core objects without main.c or host.c (no SDL), shared by the test runner. The
 # drive is included so the drive suite links; the Lorenz runner does not call it.
-CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
 # One durable unit-test binary per subsystem, plus the Lorenz runner.
-UNIT_TESTS = mem cpu cia sid vic drive via
+UNIT_TESTS = mem cpu cia sid vic drive via iec
 UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)
@@ -103,7 +103,7 @@ test-asan: $(ASAN_BINS)
 # not the far larger opcode coverage Lorenz exercises in `make test`.
 COV_DIR = build/cov
 COV_FULL_DIR = build/cov-full
-COV_CORE = bus mem cpu cpu6502 vic sid cia drive via
+COV_CORE = bus mem cpu cpu6502 vic sid cia drive via iec
 COV_CFLAGS = -std=c11 --coverage -O0 -g
 
 coverage:

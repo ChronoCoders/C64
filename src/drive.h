@@ -41,10 +41,22 @@ uint8_t drive_via_orb(unsigned n);
 uint8_t drive_via_ddrb(unsigned n);
 uint8_t drive_via_ier(unsigned n);
 uint8_t drive_via_ifr(unsigned n);
+uint8_t drive_via_pcr(unsigned n);
 uint8_t drive_via_pb(unsigned n);
 
 // The stepper head half-track position (0.. ), advanced by the VIA2 step bits.
 // There is no disk surface yet (Phase 6d); this is state only.
 int drive_head_halftrack(void);
+
+// The serial-bus connection (Phase 6c). drive_iec_out returns the lines the drive
+// pulls low (IEC_PULL_* convention, cia.h); drive_set_iec_ext feeds it the lines
+// the C64 pulls. The shared wired-AND bus (iec.c) reads one and writes the other.
+uint8_t drive_iec_out(void);
+void drive_set_iec_ext(uint8_t mask);
+
+// Test-only: write a byte on the drive's own bus (RAM/VIA1/VIA2) exactly as its
+// CPU would, so a test can drive the VIA output pins feeding the serial bus
+// without booting the DOS.
+void drive_bus_poke(uint16_t addr, uint8_t val);
 
 #endif // DRIVE_H

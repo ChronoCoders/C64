@@ -397,6 +397,18 @@ static uint8_t cia2_read_pa(void) {
     return v;
 }
 
+// The IEC lines the C64 is currently pulling low (IEC_PULL_* convention), for the
+// shared drive bus (Phase 6c): a driven CIA2 Port A out bit pulls its line low.
+// This is the read side of the connection; cia_iec_device_pull is the write side.
+uint8_t cia2_iec_out(void) {
+    uint8_t out = (uint8_t)(cia[1].reg[R_PRA] & cia[1].reg[R_DDRA]);
+    uint8_t m = 0;
+    if (out & IEC_ATN_OUT) { m |= IEC_PULL_ATN; }
+    if (out & IEC_CLK_OUT) { m |= IEC_PULL_CLK; }
+    if (out & IEC_DATA_OUT) { m |= IEC_PULL_DATA; }
+    return m;
+}
+
 // VIC video bank (0-3) from CIA2 Port A bits 0-1. VA14/VA15 are the inverted
 // driven port bits, so the reset/boot default (DDR=0, pulled up) selects bank 0.
 uint8_t cia2_vic_bank(void) {
