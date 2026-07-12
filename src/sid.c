@@ -395,7 +395,9 @@ static void filter_clock(void) {
             direct += s;  // voice 3 can be cut from the direct path (3OFF)
         }
     }
-    int32_t in = routed << FILT_STATE_SHIFT;
+    // Scale in unsigned: a left shift of a negative signed value is undefined in
+    // C; the conversion back is the two's-complement bit pattern we want.
+    int32_t in = (int32_t)((uint32_t)routed << FILT_STATE_SHIFT);
     int32_t lp = filt.lp;
     int32_t bp = filt.bp;
     lp += (int32_t)(((int64_t)filt.coef_f * bp) >> FILT_COEF_SHIFT);

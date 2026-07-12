@@ -324,8 +324,64 @@ static void test_adsr_delay_bug_stall(void) {
              "C - P2 = 291 gives 32477: an ordinary point, not the worst case");
 }
 
+// Deterministic filter run for a bit-identical audio hash: three routed voices
+// with distinct waveforms, a full cutoff sweep, stepped resonance, and all three
+// filter modes plus a combined notch. FNV-1a over the output sample stream. This
+// pins the filter's sample output so a change to the filter arithmetic cannot
+// silently alter the sound. The routed sum swings both sides of zero, so it
+// exercises the sid.c:398 shift path directly.
+#define MODE_LP 0x10u
+#define MODE_BP 0x20u
+#define MODE_HP 0x40u
+static uint64_t filter_audio_hash(void) {
+    sid_reset();
+    static const uint8_t wave[3] = { CTRL_SAW, CTRL_TRI, CTRL_PULSE };
+    for (unsigned v = 0; v < 3; v++) {
+        uint16_t b = (uint16_t)(0xD400u + 7u * v);
+        sid_write(b + 0, 0x21u);
+        sid_write(b + 1, (uint8_t)(0x08u + v * 0x06u));  // distinct pitches
+        sid_write(b + 2, 0x00u);
+        sid_write(b + 3, 0x08u);                          // 50% pulse width
+        sid_write(b + 5, 0x00u);                          // fast attack/decay
+        sid_write(b + 6, 0xF0u);                          // sustain 15 (steady level)
+        sid_write(b + 4, (uint8_t)(wave[v] | CTRL_GATE));
+    }
+    uint64_t h = 1469598103934665603ULL;
+    for (int i = 0; i < 30000; i++) {
+        sid_write(R_FC_LO, (uint8_t)(i & 0x07));                     // cutoff sweep
+        sid_write(R_FC_HI, (uint8_t)((i >> 3) & 0xFF));
+        sid_write(R_RES_ROUTE, (uint8_t)(0x07u | (((i >> 8) & 0x0Fu) << 4)));  // route 0-2, step res
+        uint8_t mode;
+        switch ((i / 7500) & 3) {
+            case 0: mode = MODE_LP; break;
+            case 1: mode = MODE_BP; break;
+            case 2: mode = MODE_HP; break;
+            default: mode = (uint8_t)(MODE_LP | MODE_HP); break;  // notch
+        }
+        sid_write(R_MODE_VOL, (uint8_t)(mode | 0x0F));  // mode + full volume
+        sid_clock();
+        uint32_t u = (uint32_t)sid_output();
+        for (int bnum = 0; bnum < 4; bnum++) {
+            h ^= (u >> (bnum * 8)) & 0xFFu;
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+// The filter's output sample stream is bit-identical to the value measured from
+// this implementation. The expected hash is the SAME before and after the
+// sid.c:398 unsigned-shift fix (a type correction for undefined behavior, not a
+// change in behavior), proving the fix altered no audio. This pins the filter
+// arithmetic so a change to it cannot silently alter the sound.
+static void test_filter_audio_bit_identical(void) {
+    CHECK_EQ((long long)filter_audio_hash(), (long long)0xfa8275ba906e3588ULL,
+             "filter output stream matches the measured bit-identical hash");
+}
+
 int main(void) {
     TEST_BEGIN("sid");
+    test_filter_audio_bit_identical();
     test_noise_first_output_is_fe();
     test_waveform_math_matches_datasheet();
     test_ring_source_is_previous_voice();
