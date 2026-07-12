@@ -19,13 +19,14 @@ SDL_LIBS := $(shell sdl2-config --libs 2>/dev/null)
 SRC = $(wildcard src/*.c)
 BIN = build/c64
 
-# Core objects without main.c or host.c (no SDL), shared by the test runner.
-CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c
+# Core objects without main.c or host.c (no SDL), shared by the test runner. The
+# drive is included so the drive suite links; the Lorenz runner does not call it.
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
 # One durable unit-test binary per subsystem, plus the Lorenz runner.
-UNIT_TESTS = mem cpu cia sid vic
+UNIT_TESTS = mem cpu cia sid vic drive
 UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)
@@ -84,8 +85,15 @@ test-asan: $(ASAN_BINS)
 	  echo "======== $$t ========"; \
 	  if ./$$t; then :; else rc=1; echo "SANITIZER FINDING in $$t"; fi; \
 	done; \
+	if command -v sdl2-config >/dev/null 2>&1; then \
+	  echo "======== host smoke (SDL dummy drivers) ========"; \
+	  $(CC) $(CSTD) $(WARN) -O1 $(ASAN_FLAGS) -Isrc -Itest $(SDL_CFLAGS) \
+	    test/host_smoke.c src/host.c $(CORE_SRC) -o build/asan-host-smoke $(SDL_LIBS); \
+	  if SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/asan-host-smoke; then \
+	    echo "host adapter: no findings"; else rc=1; echo "SANITIZER FINDING in host smoke"; fi; \
+	fi; \
 	if [ $$rc -ne 0 ]; then echo "RESULT: sanitizer findings, see above"; exit 1; fi; \
-	echo "RESULT: no sanitizer findings in the unit suites (incl. the KERNAL boot)"
+	echo "RESULT: no sanitizer findings in the unit suites (incl. the KERNAL boot and host smoke)"
 
 # Line-coverage report (gcov; gcovr/lcov not required). Instruments the core once
 # so the five unit suites accumulate into one profile, plus a headless full-machine
@@ -95,7 +103,7 @@ test-asan: $(ASAN_BINS)
 # not the far larger opcode coverage Lorenz exercises in `make test`.
 COV_DIR = build/cov
 COV_FULL_DIR = build/cov-full
-COV_CORE = bus mem cpu cpu6502 vic sid cia
+COV_CORE = bus mem cpu cpu6502 vic sid cia drive
 COV_CFLAGS = -std=c11 --coverage -O0 -g
 
 coverage:
@@ -117,12 +125,23 @@ coverage:
 	@for f in $(COV_CORE); do \
 	  l=$$(gcov -n -o $(COV_DIR) src/$$f.c 2>/dev/null | grep "Lines executed" | head -1); \
 	  printf "  %-11s %s\n" "$$f.c" "$$l"; done
-	@for f in drive main host; do \
+	@for f in main host; do \
 	  l=$$(gcov -n -o $(COV_FULL_DIR) src/$$f.c 2>/dev/null | grep "Lines executed" | head -1); \
 	  printf "  %-11s %s\n" "$$f.c" "$${l:-no data (SDL not available)}"; done
 	@echo "note: coverage is what the tests execute, not proof of correctness."
 
+# Bounded memory check under Valgrind: the headless run boots the KERNAL to READY,
+# attaches the 1541, and steps it to its idle loop, exercising CPU, VIC, SID, CIA,
+# memory and the drive together. Valgrind sees leaks, invalid accesses, and
+# uninitialised reads that AddressSanitizer does not. Requires valgrind and the
+# ROMs. Findings are reported, not fixed.
+valgrind: $(BIN)
+	@command -v valgrind >/dev/null 2>&1 || { \
+	  echo "valgrind not installed: apt install valgrind"; exit 1; }
+	valgrind --leak-check=full --show-leak-kinds=definite,indirect,possible \
+	  --track-origins=yes --error-exitcode=1 ./$(BIN) --headless
+
 clean:
 	rm -rf build
 
-.PHONY: all clean test test-asan coverage
+.PHONY: all clean test test-asan coverage valgrind

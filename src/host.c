@@ -4,6 +4,14 @@
 
 #include "cia.h"
 
+// This module is a deliberately untested thin I/O boundary. It adapts SDL to the
+// emulator (window, texture upload, event pump, audio queue) and contains no
+// emulation logic, so a defect here shows up immediately as a black window, a
+// dead key, or silence, not as a subtle wrong result. The headless path never
+// enters it, so it reads 0% under the coverage tools by design. test/host_smoke.c
+// exercises init/present/poll/shutdown under SDL's dummy drivers so a crash or
+// leak in the adapter itself is still caught under the sanitizers.
+
 // Integer upscale from the VIC framebuffer to the window; SDL's logical size
 // keeps the aspect ratio and lets the window be resized freely.
 #define HOST_SCALE 3

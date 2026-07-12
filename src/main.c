@@ -98,8 +98,8 @@ static int run_headless(void) {
     printf("  PC per frame    $%04X-$%04X, final $%04X\n", lo, hi, cpu.pc);
     printf("  border/bg       $D020=%u $D021=%u\n", vic_read(0xD020) & 0x0F,
            vic_read(0xD021) & 0x0F);
-    printf("  note            reached the keyboard-input loop; keyboard needs "
-           "the CIA (Phase 5).\n");
+    printf("  note            KERNAL booted to READY and idles in the keyboard "
+           "scan; the full machine (both CIAs, the 1541 drive) is present.\n");
     return 0;
 }
 
