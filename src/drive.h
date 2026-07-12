@@ -33,4 +33,18 @@ const CPU6502 *drive_core(void);
 uint64_t drive_cycles(void);
 uint8_t drive_ram_peek(uint16_t addr);
 
+// Inspection of a drive VIA (n = 1 for VIA1 at $1800, 2 for VIA2 at $1C00), with
+// no read side effects: the port B output register, its direction, the interrupt
+// enable and flag registers, and the composed port B read (output bits plus the
+// live input pins). For asserting what the DOS leaves in the VIAs.
+uint8_t drive_via_orb(unsigned n);
+uint8_t drive_via_ddrb(unsigned n);
+uint8_t drive_via_ier(unsigned n);
+uint8_t drive_via_ifr(unsigned n);
+uint8_t drive_via_pb(unsigned n);
+
+// The stepper head half-track position (0.. ), advanced by the VIA2 step bits.
+// There is no disk surface yet (Phase 6d); this is state only.
+int drive_head_halftrack(void);
+
 #endif // DRIVE_H

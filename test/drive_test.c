@@ -11,6 +11,7 @@
 #include "drive.h"
 #include "cpu6502.h"
 #include "mem.h"
+#include "via.h"
 
 // A synthetic 16 KB ROM: writes a sentinel to drive RAM $0200, fills $0300-$03FF
 // with 0..255, writes a marker to $0400, then idles in a self-JMP. Reset vector
@@ -104,6 +105,15 @@ static void test_graceful_without_rom(void) {
 
 // ---- Real DOS ROM tests (skip cleanly when rom/1541.rom is absent) ----------
 
+// The real DOS power-on is the witness that the VIAs talk correctly. Every value
+// below is OBSERVED from the real 901229-05 ROM running on the datasheet-correct
+// VIAs, not assumed: the DOS settles in its documented $EBFF-$EC9D main loop,
+// dwelling there while its VIA2 Timer 1 free-run interrupt periodically runs the
+// handler. At rest it has enabled the VIA1 CA1 (ATN) interrupt (it is waiting for
+// the computer's attention, which Phase 6c supplies) and the VIA2 Timer 1
+// interrupt, left the motor off and the IEC lines idle high as device 8, and
+// initialised its 2 KB RAM. (Reset entry $EAA0 and the main loop range are the
+// documented 1541 ROM landmarks.)
 static void test_real_dos_boot(void) {
     drive_init();
     if (!drive_load_rom("rom/1541.rom")) {
@@ -112,21 +122,29 @@ static void test_real_dos_boot(void) {
     }
     drive_reset();
     const CPU6502 *c = drive_core();
-    // Documented 1541 (901229-05) reset entry.
     CHECK_EQ(c->pc, 0xEAA0, "DOS reset vector lands at $EAA0");
     for (int i = 0; i < 1500000; i++) { drive_tick(); }  // power-on + RAM test -> idle
-    uint16_t lo = 0xFFFF, hi = 0;
-    for (int i = 0; i < 20000; i++) {
+    CHECK_EQ(cpu6502_jammed(c) ? 1 : 0, 0, "DOS not jammed (RAM test passed, reached idle)");
+
+    int idle = 0, elsewhere = 0;
+    for (int i = 0; i < 200000; i++) {
         drive_tick();
         uint16_t pc = c->pc;
-        if (pc < lo) { lo = pc; }
-        if (pc > hi) { hi = pc; }
+        if (pc >= 0xEBFF && pc <= 0xEC9D) { idle++; } else { elsewhere++; }
     }
-    // Documented 1541 DOS main/idle loop; reaching it means power-on and the RAM
-    // test passed (a RAM failure traps in the error-blink handler, not here).
-    CHECK(lo >= 0xEBFF, "DOS idle loop low bound >= $EBFF");
-    CHECK(hi <= 0xEC9D, "DOS idle loop high bound <= $EC9D");
-    CHECK_EQ(cpu6502_jammed(c) ? 1 : 0, 0, "DOS not jammed (RAM test passed, reached idle)");
+    CHECK(idle > 180000, "DOS dwells in its $EBFF-$EC9D main loop");
+    CHECK(elsewhere > 0, "the VIA2 Timer 1 interrupt fires and runs the handler");
+    CHECK(elsewhere < 20000, "handler excursions are a small minority of the time");
+
+    // VIA state the real DOS leaves at idle (observed from the ROM, not assumed).
+    CHECK_EQ(drive_via_ier(1) & VIA_IRQ_CA1, VIA_IRQ_CA1,
+             "VIA1 CA1 (ATN) interrupt enabled: the idle loop is waiting on ATN");
+    CHECK_EQ(drive_via_ier(2) & VIA_IRQ_T1, VIA_IRQ_T1, "VIA2 Timer 1 interrupt enabled");
+    CHECK_EQ(drive_via_pb(2) & 0x04u, 0, "VIA2 motor (PB2) off at idle");
+    CHECK_EQ(drive_via_pb(1) & 0x01u, 0x01u, "VIA1 DATA in idle high (line not pulled)");
+    CHECK_EQ(drive_via_pb(1) & 0x04u, 0x04u, "VIA1 CLK in idle high (line not pulled)");
+    CHECK_EQ(drive_via_pb(1) & 0x60u, 0x60u, "VIA1 device-number jumpers read device 8");
+
     int nz = 0;
     for (int a = 0; a < 0x0800; a++) { if (drive_ram_peek((uint16_t)a)) { nz++; } }
     CHECK(nz > 0, "DOS initialised the drive's 2 KB RAM");
