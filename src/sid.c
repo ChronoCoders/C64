@@ -166,14 +166,15 @@ static int32_t direct_out;  // unrouted voices sum (signal units)
 
 // ---- Audio output / resampling (Phase 4d) ---------------------------------
 //
-// The SID is mono. sid_clock() (driven at phi2 by the machine loop) box-averages
-// the phi2-rate mix down to the host rate by Bresenham decimation, DC-blocks it
-// (AC-coupling), and pushes 16-bit samples into a ring the host drains.
-// Producer (sid_clock) and consumer (sid_audio_read) are single each; the host
-// uses SDL's queue API from the same thread as the loop, so no locking is
-// needed. Resampling and the mix are fixed-point; no floating point.
-// invariant: box-average decimation is only first-order anti-aliasing; strong
-//   SID high harmonics still alias somewhat (a polyphase FIR would improve it).
+// The SID is mono. sid_clock() (driven at phi2 by the machine loop) low-passes the
+// phi2-rate mix with an anti-alias FIR and decimates it to the host rate by
+// Bresenham phase accumulation, DC-blocks it (AC-coupling), and pushes 16-bit
+// samples into a ring the host drains. Producer (sid_clock) and consumer
+// (sid_audio_read) are single each; the host uses SDL's queue API from the same
+// thread as the loop, so no locking is needed. The FIR, resampling and the mix are
+// fixed-point; no floating point (the FIR coefficients are generated offline).
+// invariant: the FIR gives ~60 dB attenuation above the 24 kHz stopband, so the
+//   SID's high harmonics no longer fold back into the audible band as noise.
 #define SID_PHI2_HZ 985248u   // PAL phi2, the resampling reference rate
 #define AUDIO_RATE_HZ 44100u  // host output rate
 #define AUDIO_OUT_SHIFT 10    // mix -> 16-bit output scale
@@ -191,12 +192,41 @@ static int32_t direct_out;  // unrouted voices sum (signal units)
 //   write sets a proportional output level, resampled and AC-coupled).
 #define MIXER_DC 524288
 
+// Decimating anti-alias FIR: a Kaiser windowed-sinc low-pass (fc ~19 kHz, flat to
+// 14 kHz, ~60 dB stopband by 24 kHz and >80 dB above) applied to the phi2-rate
+// stream before Bresenham decimation to the host rate. Coefficients are Q15 fixed
+// point with unity DC gain (sum = 32768), generated offline (windowed sinc, Kaiser
+// beta 5.65) so the runtime stays float-free. This replaces the former first-order
+// box average, which passed too much high-frequency energy and folded it back into
+// the audible band as noise.
+#define FIR_LEN 357
+#define FIR_SHIFT 15
+static const int32_t FIR_COEF[FIR_LEN] = {
+0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 1, 1, 0, 0, -1, -2, -3, -4, -4, -5,
+-6, -7, -8, -9, -9, -10, -10, -10, -11, -11, -10, -10, -9, -8, -7, -6, -4, -3, -1, 1, 3, 6, 8,
+10, 13, 15, 17, 20, 21, 23, 25, 26, 27, 27, 27, 26, 26, 24, 22, 20, 17, 14, 10, 6, 1, -3, -8,
+-14, -19, -24, -29, -34, -39, -44, -48, -51, -54, -56, -57, -58, -58, -56, -54, -51, -47, -41,
+-35, -28, -20, -11, -2, 8, 18, 29, 39, 50, 60, 70, 80, 89, 96, 103, 109, 113, 115, 116, 115,
+112, 108, 101, 92, 82, 69, 55, 39, 22, 3, -17, -38, -59, -81, -103, -124, -145, -165, -183,
+-200, -214, -227, -236, -242, -245, -245, -240, -232, -219, -201, -179, -153, -122, -87, -47,
+-3, 44, 96, 151, 209, 269, 332, 397, 462, 529, 596, 662, 727, 791, 853, 912, 968, 1021, 1069,
+1113, 1152, 1185, 1213, 1235, 1251, 1260, 1264, 1260, 1251, 1235, 1213, 1185, 1152, 1113, 1069,
+1021, 968, 912, 853, 791, 727, 662, 596, 529, 462, 397, 332, 269, 209, 151, 96, 44, -3, -47,
+-87, -122, -153, -179, -201, -219, -232, -240, -245, -245, -242, -236, -227, -214, -200, -183,
+-165, -145, -124, -103, -81, -59, -38, -17, 3, 22, 39, 55, 69, 82, 92, 101, 108, 112, 115, 116,
+115, 113, 109, 103, 96, 89, 80, 70, 60, 50, 39, 29, 18, 8, -2, -11, -20, -28, -35, -41, -47,
+-51, -54, -56, -58, -58, -57, -56, -54, -51, -48, -44, -39, -34, -29, -24, -19, -14, -8, -3, 1,
+6, 10, 14, 17, 20, 22, 24, 26, 26, 27, 27, 27, 26, 25, 23, 21, 20, 17, 15, 13, 10, 8, 6, 3, 1,
+-1, -3, -4, -6, -7, -8, -9, -10, -10, -11, -11, -10, -10, -10, -9, -9, -8, -7, -6, -5, -4, -4,
+-3, -2, -1, 0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 0
+};
+
 static bool audio_on;
 static int16_t audio_ring[AUDIO_RING_SIZE];
 static unsigned audio_head;  // producer index
 static unsigned audio_tail;  // consumer index
-static int64_t rs_sum;       // box-average accumulator
-static int32_t rs_count;
+static int32_t fir_hist[FIR_LEN];  // phi2-rate history feeding the decimating FIR
+static unsigned fir_pos;           // ring write index (also the oldest sample)
 static uint32_t rs_phase;    // Bresenham resample phase
 static int64_t dc_lp;        // DC-blocker lowpass estimate
 
@@ -459,17 +489,26 @@ void sid_clock(void) {
     }
     filter_clock();
 
-    // Pass 4: resample the phi2-rate mix to the host rate (box average +
-    // Bresenham decimation), DC-block, and push a 16-bit sample.
+    // Pass 4: push the mix into the FIR history, and at each Bresenham output
+    // instant convolve to a low-passed sample, DC-block it, and push 16-bit.
     if (audio_on) {
-        rs_sum += sid_output();
-        rs_count++;
+        fir_hist[fir_pos] = sid_output();
+        fir_pos++;
+        if (fir_pos >= FIR_LEN) { fir_pos = 0; }  // now points at the oldest sample
         rs_phase += AUDIO_RATE_HZ;
         if (rs_phase >= SID_PHI2_HZ) {
             rs_phase -= SID_PHI2_HZ;
-            int32_t avg = (int32_t)(rs_sum / rs_count);
-            rs_sum = 0;
-            rs_count = 0;
+            // Low-pass the last FIR_LEN phi2 samples (oldest at fir_pos) then take
+            // this one output sample. Symmetric coefficients, unity DC gain, so the
+            // level is unchanged; the accumulator is 64-bit to hold the products.
+            int64_t acc = 0;
+            unsigned idx = fir_pos;
+            for (unsigned k = 0; k < FIR_LEN; k++) {
+                acc += (int64_t)FIR_COEF[k] * fir_hist[idx];
+                idx++;
+                if (idx >= FIR_LEN) { idx = 0; }
+            }
+            int32_t avg = (int32_t)(acc >> FIR_SHIFT);
             dc_lp += avg - (int32_t)(dc_lp >> AUDIO_DC_SHIFT);
             int32_t hp = avg - (int32_t)(dc_lp >> AUDIO_DC_SHIFT);
             int32_t o = hp >> AUDIO_OUT_SHIFT;
@@ -598,8 +637,8 @@ void sid_reset(void) {
     audio_on = false;
     audio_head = 0;
     audio_tail = 0;
-    rs_sum = 0;
-    rs_count = 0;
+    memset(fir_hist, 0, sizeof(fir_hist));
+    fir_pos = 0;
     rs_phase = 0;
     dc_lp = 0;
 }
