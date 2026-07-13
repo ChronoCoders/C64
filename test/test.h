@@ -45,7 +45,13 @@ static int test_skip;
         printf("  SKIP %s: %s\n", (name), (reason));                           \
     } while (0)
 
-#define TEST_BEGIN(suite) printf("== %s ==\n", (suite))
+// Line-buffer stdout so a suite killed or crashed mid-run leaves every completed
+// line on disk (block buffering would discard the whole trail), then announce it.
+#define TEST_BEGIN(suite)                                                      \
+    do {                                                                       \
+        setvbuf(stdout, NULL, _IOLBF, 0);                                      \
+        printf("== %s ==\n", (suite));                                         \
+    } while (0)
 
 // Print the per-suite line the Makefile aggregates, and return the exit code.
 #define TEST_SUMMARY(suite)                                                    \

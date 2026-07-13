@@ -385,6 +385,7 @@ static void report(StopReason reason) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IOLBF, 0);  // line-buffered: a killed run keeps its trail
     if (argc > 1) {
         snprintf(g_suite_dir, sizeof(g_suite_dir), "%s", argv[1]);
     }
