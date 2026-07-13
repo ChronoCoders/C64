@@ -25,6 +25,7 @@ static void build_min_rom(const char *path) {
     rom[0] = 0x4C; rom[1] = 0x00; rom[2] = 0xC0;  // $C000: JMP $C000
     rom[0x3FFC] = 0x00; rom[0x3FFD] = 0xC0;
     FILE *f = fopen(path, "wb");
+    if (f == NULL) { return; }  // absent file makes the load fail loudly, not crash
     fwrite(rom, 1, sizeof(rom), f);
     fclose(f);
 }
@@ -208,7 +209,7 @@ static void test_clock_skew(void) {
 
 int main(void) {
     TEST_BEGIN("iec");
-    const char *synth = "/tmp/claude-1000/-home-chronocoder/22621c68-1b4e-4036-a32e-6c77a56f17d7/scratchpad/synth_iec.rom";
+    const char *synth = "build/synth_iec.rom";
     build_min_rom(synth);
     test_wired_and(synth);
     test_atn_wakes_drive();

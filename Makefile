@@ -49,9 +49,13 @@ build/test-%: test/%_test.c test/test.h $(CORE_SRC)
 # Build and run every unit suite headless plus the Lorenz runner; report per
 # subsystem and a total, and exit non-zero if any unit assertion failed.
 test: $(UNIT_BINS) $(TEST_BIN)
-	@rc=0; : > build/test.log; \
+	@rc=0; crashed=0; crashlist=""; : > build/test.log; \
 	for t in $(UNIT_BINS); do \
-	  if ./$$t >> build/test.log 2>&1; then :; else rc=1; fi; \
+	  if ./$$t >> build/test.log 2>&1; then :; else \
+	    ec=$$?; rc=1; crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
+	    echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
+	      >> build/test.log; \
+	  fi; \
 	done; \
 	echo "======== unit tests ========"; cat build/test.log; \
 	echo "======== lorenz ========"; \
@@ -59,7 +63,8 @@ test: $(UNIT_BINS) $(TEST_BIN)
 	  echo "  (lorenz suite not present under test/lorenz; skipped)"; \
 	echo "======== summary ========"; \
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
-	     END{printf "TOTAL: %d passed, %d failed, %d skipped\n",p,f,s}' build/test.log; \
+	     END{printf "TOTAL: %d passed, %d failed, %d skipped (completed suites only)\n",p,f,s}' build/test.log; \
+	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
 	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
 	echo "RESULT: all unit suites passed"
 

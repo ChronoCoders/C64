@@ -42,6 +42,7 @@ static void build_synth_rom(const char *path) {
     rom[0x3FFC] = 0x00;
     rom[0x3FFD] = 0xC0;  // reset vector -> $C000
     FILE *f = fopen(path, "wb");
+    if (f == NULL) { return; }  // absent file makes the load fail loudly, not crash
     fwrite(rom, 1, sizeof(rom), f);
     fclose(f);
 }
@@ -620,7 +621,7 @@ static void test_bam_after_save(void) {
 // file we did not mount cleanly is never touched. Source: the write-back contract.
 static void test_writeback(void) {
     if (!roms_present()) { SKIP("write-back", "C64 or 1541 ROM absent"); return; }
-    const char *path = "/tmp/claude-1000/-home-chronocoder/22621c68-1b4e-4036-a32e-6c77a56f17d7/scratchpad/wb_test.d64";
+    const char *path = "build/wb_test.d64";
 
     // An in-memory mount has no path: write-back must refuse.
     ensure_golden();
@@ -705,7 +706,7 @@ static void test_bam_near_full(void) {
 
 int main(void) {
     TEST_BEGIN("drive");
-    const char *synth = "/tmp/claude-1000/-home-chronocoder/22621c68-1b4e-4036-a32e-6c77a56f17d7/scratchpad/synth1541_dt.rom";
+    const char *synth = "build/synth1541_dt.rom";
     build_synth_rom(synth);
     test_boot_from_rom_reaches_idle(synth);
     test_drive_ram_works();
