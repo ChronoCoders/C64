@@ -13,6 +13,7 @@
 
 #define AUDIO_RATE 44100
 #define AUDIO_TARGET_SAMPLES 3528  // ~4 PAL frames of buffered audio (paces to realtime)
+#define WARP_FRAMES 20  // emulated frames per presented frame while warp (F10) is on
 
 // C64 emulator entry point. By default it opens an SDL2 window, boots the real
 // ROMs, and runs frames continuously, presenting each rendered frame. With
@@ -63,17 +64,21 @@ static int run_visible(void) {
                host_error());
     }
     while (!host_poll()) {
-        iec_step_frame();  // C64 and drive interleaved per cycle over the serial bus
-        if (audio) {
-            int16_t abuf[2048];
-            unsigned n;
-            while ((n = sid_audio_read(abuf, 2048)) > 0) {
-                host_audio_push(abuf, (int)n);
+        bool warp = host_warp();  // F10: run unthrottled, many frames per presented one
+        int frames = warp ? WARP_FRAMES : 1;
+        for (int i = 0; i < frames; i++) {
+            iec_step_frame();  // C64 and drive interleaved per cycle over the serial bus
+            if (audio) {
+                int16_t abuf[2048];
+                unsigned n;
+                while ((n = sid_audio_read(abuf, 2048)) > 0) {
+                    if (!warp) { host_audio_push(abuf, (int)n); }  // drain but mute in warp
+                }
             }
         }
         host_present(vic_framebuffer());
-        if (audio) {
-            host_audio_pace(AUDIO_TARGET_SAMPLES);  // pace emulation to audio realtime
+        if (audio && !warp) {
+            host_audio_pace(AUDIO_TARGET_SAMPLES);  // pace to audio realtime (skipped in warp)
         }
     }
     host_audio_shutdown();

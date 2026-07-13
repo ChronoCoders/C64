@@ -77,6 +77,8 @@ static const KeyMap KEY_POS[] = {
     {SDL_SCANCODE_RIGHTBRACKET, 6, 1}, {SDL_SCANCODE_GRAVE, 7, 1},
 };
 static bool symbolic_mode = true;  // symbolic is the friendly default; F11 toggles
+static bool warp_mode;             // F10 toggles unthrottled (turbo) emulation
+static char base_title[64];        // window title, for appending the [WARP] tag
 
 #define LSHIFT_ROW 1u
 #define LSHIFT_COL 7u
@@ -91,6 +93,7 @@ bool host_init(int width, int height, const char *title) {
         }
     }
     fb_pitch = width * (int)sizeof(uint32_t);
+    SDL_snprintf(base_title, sizeof(base_title), "%s", title);
     window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               width * HOST_SCALE, height * HOST_SCALE,
                               SDL_WINDOW_RESIZABLE);
@@ -207,6 +210,12 @@ bool host_poll(void) {
                    !e.key.repeat) {
             symbolic_mode = !symbolic_mode;  // toggle symbolic/positional keyboard
             cia_key_reset();                 // drop held keys so none stick across modes
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F10 &&
+                   !e.key.repeat) {
+            warp_mode = !warp_mode;  // host control (F10 = warp/turbo), not C64 input
+            char t[80];
+            SDL_snprintf(t, sizeof(t), "%s%s", base_title, warp_mode ? " [WARP]" : "");
+            SDL_SetWindowTitle(window, t);
         } else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
             apply_key(e.key.keysym.scancode, e.key.keysym.sym, true);
         } else if (e.type == SDL_KEYUP) {
@@ -221,6 +230,8 @@ bool host_poll(void) {
     poll_joystick();
     return quit;
 }
+
+bool host_warp(void) { return warp_mode; }
 
 const char *host_error(void) { return SDL_GetError(); }
 

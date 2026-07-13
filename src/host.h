@@ -23,6 +23,10 @@ void host_present(const uint32_t *framebuffer);
 // or F12). Also maps the host keyboard and joystick onto the CIA1 matrix.
 bool host_poll(void);
 
+// True while warp/turbo (F10) is on: the caller should run the machine unthrottled
+// (many emulated frames per presented frame, audio pacing skipped).
+bool host_warp(void);
+
 void host_shutdown(void);
 
 // SDL audio output (Phase 4d): mono signed-16-bit at the given rate, via SDL's
