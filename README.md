@@ -12,15 +12,12 @@ input. Implemented so far:
 - VIC-II: raster timing, badlines, sprites, 40x25 text rendering, and the CIA2-selected video bank.
 - SID 6581: oscillators, waveforms, ADSR envelopes, filter, and host audio output (clean-room, no reSID).
 - CIA 6526 (both chips): timers and interrupts, the 8x8 keyboard matrix and two joysticks, the RESTORE NMI, the TOD clock, the serial shift register, and the CIA2 IEC bus lines.
-- 1541 disk drive: a second machine on the shared 6502 core, with its own 2 KB RAM, 16 KB DOS ROM, and 1.0 MHz clock domain; it boots its DOS to the idle loop.
+- 1541 disk drive: a full second machine on the shared 6502 core, with its own 2 KB RAM, 16 KB DOS ROM, two 6522 VIAs, and a 1.0 MHz clock domain. It talks to the C64 over the IEC serial bus and reads and writes a `.d64` image through a modeled rotating GCR surface, so `LOAD` (directory or program), `SAVE`, and `NEW` (format) all work. Read/write, no copy protection.
 
 Regression is tracked against the Wolfgang Lorenz 6502/6510 test suite, a set of
 per-subsystem unit tests, and a boot-render hash (all run by `make test`).
 
-Not yet implemented on the drive: VIA1/VIA2 are register stubs (no timers or
-ports yet), and the IEC bus between the C64 and the drive is not connected, so
-the two machines cannot yet talk. Also unimplemented: cartridges, NTSC timing,
-and paddles.
+Not yet implemented: cartridges (`.crt`), tape, NTSC timing, and paddles.
 
 ## Input
 
@@ -32,7 +29,12 @@ CIA1 ports:
   (authentic C64 layout). `Page Up` is RESTORE.
 - Joystick 2 (Port A): a connected game controller, or the numpad (8/2/4/6 for
   directions, 0 or Right Ctrl for fire).
+- `F10` toggles warp (turbo): the machine runs unthrottled, so a slow stock-1541
+  serial load finishes in a couple of seconds instead of the authentic ~80.
 - `F12` quits.
+
+Pass `--disk path.d64` to mount a disk read-only on device 8 (then `LOAD"*",8,1`
+and `RUN` from the `READY.` prompt), or `--headless` to run without a window.
 
 ## Build
 
