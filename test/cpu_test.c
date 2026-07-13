@@ -545,6 +545,28 @@ static void test_interrupt_edge_cases(void) {
     CHECK_EQ(mem_read(0x01FD) & FLAG_U, FLAG_U, "hardware IRQ pushes bit 5 set");
 }
 
+// The SO (Set Overflow) input pin. A negative transition sets V; it is edge-
+// triggered, not level (holding SO low does not re-set V after a CLV). The 6510
+// leaves SO idle high, so this never fires for the C64; the 1541 wires BYTE READY
+// here. Source: MOS 6502 datasheet, SO pin. This is added for Phase 6d.
+static void test_so_pin(void) {
+    all_ram();
+    for (int i = 0; i < 16; i++) { mem_write((uint16_t)(0x0200 + i), 0xEA); }  // NOP sled
+    cpu.pc = 0x0200; cpu.cycle = 0; cpu.p = 0x24;  // V clear
+    cpu.so_line = 1; cpu.so_last = 1;
+    cpu_tick();
+    CHECK_EQ(cpu.p & FLAG_V, 0, "SO idle high leaves V clear");
+    cpu.so_line = 0;  // BYTE READY asserts: negative transition
+    cpu_tick();
+    CHECK_EQ(cpu.p & FLAG_V, FLAG_V, "SO negative edge sets V");
+    cpu.p &= (uint8_t)~FLAG_V;  // CLV
+    cpu_tick();                  // SO still low: no new edge
+    CHECK_EQ(cpu.p & FLAG_V, 0, "held-low SO does not re-set V (edge-triggered)");
+    cpu.so_line = 1; cpu_tick();  // release
+    cpu.so_line = 0; cpu_tick();  // a fresh negative edge
+    CHECK_EQ(cpu.p & FLAG_V, FLAG_V, "a new SO negative edge sets V again");
+}
+
 int main(void) {
     TEST_BEGIN("cpu");
     mem_init();
@@ -560,5 +582,6 @@ int main(void) {
     test_decimal_mode();
     test_rmw_dummy_write();
     test_interrupt_edge_cases();
+    test_so_pin();
     return TEST_SUMMARY("cpu");
 }

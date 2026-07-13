@@ -28,6 +28,8 @@ typedef struct {
     uint8_t nmi_last;   // for NMI edge detection
     uint8_t irq_line;   // IRQ input pin, active-low (1 = idle); owner-driven
     uint8_t nmi_line;   // NMI input pin, active-low (1 = idle); owner-driven
+    uint8_t so_line;    // SO input pin, active-low (1 = idle); owner-driven
+    uint8_t so_last;    // previous SO level, for falling-edge detection
 
     // Execution-sequencer state (per instance).
     bool halted;        // fetched an unimplemented opcode

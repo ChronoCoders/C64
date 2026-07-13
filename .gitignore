@@ -1,6 +1,7 @@
 build/
 rom/*.rom
 test/lorenz/
+games/
 *.o
 *.swp
 .DS_Store

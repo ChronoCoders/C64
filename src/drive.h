@@ -59,4 +59,12 @@ void drive_set_iec_ext(uint8_t mask);
 // without booting the DOS.
 void drive_bus_poke(uint16_t addr, uint8_t val);
 
+// Read-head inspection and placement (Phase 6d tests): the current bit position in
+// the track ring, whether the head is over a SYNC mark, the last GCR byte assembled
+// off the surface, and a way to place the head at a given half-track.
+unsigned drive_head_bit(void);
+bool drive_sync(void);
+uint8_t drive_read_byte(void);
+void drive_set_halftrack(int halftrack);
+
 #endif // DRIVE_H

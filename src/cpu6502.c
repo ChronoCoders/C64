@@ -1194,6 +1194,17 @@ static void poll_nmi_edge(void) {
     cpu.nmi_last = cpu.nmi_line;
 }
 
+// SO (Set Overflow) edge detection, run every cycle. cpu.so_line is active-low; a
+// high-to-low transition sets the overflow flag directly (MOS 6502 datasheet: a
+// negative transition on SO sets V; CLV clears it). The 6510 leaves SO idle high,
+// so this never fires for the C64; the 1541 wires BYTE READY here (drive.c).
+static void poll_so_edge(void) {
+    if (cpu.so_last == 1 && cpu.so_line == 0) {
+        set_v(true);
+    }
+    cpu.so_last = cpu.so_line;
+}
+
 // Interrupt recognition: NMI (edge, unmaskable) wins over IRQ (level, masked by
 // I). Sampled before each mid-instruction cycle; the last sample before a
 // boundary is the penultimate-cycle state, which gives the CLI/SEI/PLP
@@ -1695,6 +1706,8 @@ void cpu6502_init(CPU6502 *c, void *ctx, Cpu6502Read rd, Cpu6502Write wr) {
     c->nmi_last = 1;   // NMI line idle high
     c->irq_line = 1;
     c->nmi_line = 1;
+    c->so_line = 1;    // SO line idle high (owner drives it low on BYTE READY)
+    c->so_last = 1;
 }
 
 void cpu6502_reset(CPU6502 *c) {
@@ -1709,6 +1722,8 @@ void cpu6502_reset(CPU6502 *c) {
     cpu.pc = (uint16_t)(bus_read(0xFFFC) | (bus_read(0xFFFD) << 8));
     cpu.cycle = 0;
     cpu.nmi_last = 1;
+    cpu.so_line = 1;
+    cpu.so_last = 1;
     cpu.halted = false;
     cpu.jammed = false;  // reset is the only recovery from a jam
     cpu.in_interrupt = false;
@@ -1721,6 +1736,7 @@ void cpu6502_tick(CPU6502 *c) {
         return;
     }
     poll_nmi_edge();  // sample the NMI line every cycle
+    poll_so_edge();   // sample the SO line every cycle (1541 BYTE READY; inert for C64)
 
     if (cpu.cycle == 0) {
         // Instruction boundary: act on the interrupt decision latched during the

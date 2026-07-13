@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "disk.h"
 #include "via.h"
 
 // Clock domains: the drive runs at 1.0 MHz, the C64 at PAL phi2 985248 Hz. They
@@ -49,6 +50,21 @@ static bool rom_loaded;
 static uint64_t cycle_count;
 static uint64_t phi2_acc;
 
+// Disk read head (Phase 6d). As the disk turns, the head sees the track's GCR bit
+// ring; the drive shifts bits in and, every eight bit-cells, BYTE READY asserts:
+// it pulls VIA2 CA1 low and the CPU SO line low so the DOS read loop (BVC on the
+// overflow flag) takes the byte from VIA2 PA. SYNC is a run of >=10 one-bits, wired
+// to VIA2 PB7 (active low). The bit-cell rate is per zone. Sources: 1541 schematic
+// read electronics (UE7 bit counter, UD3 shift register) and the disk format.
+static unsigned head_bit;      // bit index into the current track's GCR ring
+static unsigned bitcell_acc;   // accumulator in 16 MHz units for bit-cell timing
+static uint32_t read_shift;    // bits shifted in, for byte assembly and SYNC
+static unsigned ones_run;      // consecutive one-bits seen (SYNC when >= 10)
+static unsigned bit_in_byte;   // bits accumulated toward the current GCR byte
+static bool sync_active;        // head is currently over a SYNC mark
+static uint8_t read_byte;        // last assembled GCR byte, presented on VIA2 PA
+static bool byte_ready;          // BYTE READY asserted on this drive cycle
+
 // A DATA or CLK line is low if the drive drives its OUT bit or the external bus
 // pulls it; ATN is driven only by the controller. The serial IN lines are
 // inverted (PB0/PB2/PB7 read 1 when their line is low), and the device jumpers
@@ -65,11 +81,15 @@ static void compose_via1_ports(void) {
     via1.pb_in = pb;
 }
 
-// VIA2 inputs with no disk (Phase 6d): write protect (PB4) and SYNC (PB7) read
-// high (writable, no sync); the read/write data port PA reads idle high.
+// VIA2 inputs. PB7 is SYNC (active low: 0 while the head is over a SYNC mark), PB4
+// is write protect (high = not protected; reads are always allowed). Port A carries
+// the GCR byte last assembled off the surface. With no disk the port reads idle
+// high and SYNC stays inactive. Source: 1541 schematic VIA2 wiring.
 static void compose_via2_ports(void) {
-    via2.pb_in = 0xFFu;
-    via2.pa_in = 0xFFu;
+    uint8_t pb = 0xFFu;
+    if (sync_active) { pb &= (uint8_t)~0x80u; }  // PB7 SYNC, active low
+    via2.pb_in = pb;
+    via2.pa_in = disk_present() ? read_byte : 0xFFu;
 }
 
 // Decode the VIA2 stepper: cycling PB0-1 through the phase sequence walks the
@@ -127,16 +147,29 @@ void drive_bus_poke(uint16_t addr, uint8_t val) {
     drive_write(NULL, addr, val);
 }
 
+// Read-head state clears on init/reset; the disk (if any) is left mounted.
+static void reset_read_state(void) {
+    head_bit = 0;
+    bitcell_acc = 0;
+    read_shift = 0;
+    ones_run = 0;
+    bit_in_byte = 0;
+    sync_active = false;
+    read_byte = 0xFFu;
+    byte_ready = false;
+}
+
 void drive_init(void) {
     memset(drive_ram, 0, sizeof(drive_ram));
     via_reset(&via1);
     via_reset(&via2);
     iec_ext = 0;
-    head_halftrack = 18 * 2;  // DOS parks near track 18; position is state only
+    head_halftrack = 17 * 2;  // track 18 = halftrack (18-1)*2; the DOS parks there
     step_phase = 0;
     rom_loaded = false;
     cycle_count = 0;
     phi2_acc = 0;
+    reset_read_state();
     cpu6502_init(&drive, NULL, drive_read, drive_write);
 }
 
@@ -146,6 +179,7 @@ void drive_reset(void) {
     step_phase = 0;
     cycle_count = 0;
     phi2_acc = 0;
+    reset_read_state();
     cpu6502_reset(&drive);  // PC from $FFFC/$FFFD in the DOS ROM
 }
 
@@ -168,11 +202,61 @@ bool drive_load_rom(const char *path) {
 
 bool drive_present(void) { return rom_loaded; }
 
+// Advance the read head by the bits that elapse in one drive (1 MHz) cycle. A
+// bit-cell lasts (byte_cycles*2) periods of the 16 MHz read clock; one drive cycle
+// is 16 of those periods, so the accumulator advances the head at the zone's exact
+// bit rate with integer arithmetic. The disk turns only while the motor (VIA2 PB2)
+// runs; between valid tracks there is no signal. When eight bits assemble outside a
+// SYNC, BYTE READY fires: latch the byte, pull VIA2 CA1 and the CPU SO line low.
+static void disk_read_step(void) {
+    if (byte_ready) {                     // release the previous cycle's pulse
+        byte_ready = false;
+        drive.so_line = 1;
+        via_set_ca1(&via2, true);
+    }
+    bool motor_on = (via2.orb & via2.ddrb & 0x04u) != 0;
+    if (!disk_present() || !motor_on) {
+        sync_active = false;
+        return;
+    }
+    unsigned track = (unsigned)(head_halftrack / 2) + 1u;
+    unsigned nbits = 0;
+    const uint8_t *ring = disk_track_gcr(track, &nbits);
+    if (ring == NULL || nbits == 0u) {    // half-track gap or beyond track 35
+        sync_active = false;
+        return;
+    }
+    unsigned divisor = disk_track_byte_cycles(track) * 2u;
+    bitcell_acc += 16u;
+    while (bitcell_acc >= divisor) {
+        bitcell_acc -= divisor;
+        unsigned bit = (ring[head_bit >> 3] >> (7u - (head_bit & 7u))) & 1u;
+        head_bit++;
+        if (head_bit >= nbits) { head_bit = 0; }
+        read_shift = (read_shift << 1) | bit;
+        if (bit) { ones_run++; } else { ones_run = 0; }
+        if (ones_run >= 10u) {
+            sync_active = true;
+            bit_in_byte = 0;
+        } else {
+            if (sync_active) { sync_active = false; bit_in_byte = 1u; }
+            else { bit_in_byte++; }
+            if (bit_in_byte >= 8u) {
+                bit_in_byte = 0;
+                read_byte = (uint8_t)(read_shift & 0xFFu);
+                byte_ready = true;
+                drive.so_line = 0;            // negative edge on SO sets V
+                via_set_ca1(&via2, false);    // BYTE READY low -> VIA2 CA1 edge
+            }
+        }
+    }
+}
+
 void drive_tick(void) {
+    disk_read_step();  // the surface under the head, ahead of sampling this cycle
     // ATN reaches VIA1 CA1 inverted: CA1 is high when ATN is asserted (the C64
     // pulls it low), so the C64 asserting ATN is a rising edge, which the DOS
-    // interrupts on to leave its idle loop. BYTE READY on VIA2 CA1 is inert until
-    // a disk exists (Phase 6d).
+    // interrupts on to leave its idle loop.
     via_set_ca1(&via1, (iec_ext & IEC_ATN) != 0);
     via_step(&via1);
     via_step(&via2);
@@ -217,6 +301,16 @@ uint8_t drive_via_pb(unsigned n) {
 }
 
 int drive_head_halftrack(void) { return head_halftrack; }
+
+unsigned drive_head_bit(void) { return head_bit; }
+bool drive_sync(void) { return sync_active; }
+uint8_t drive_read_byte(void) { return read_byte; }
+void drive_set_halftrack(int halftrack) {
+    if (halftrack < 0) { halftrack = 0; }
+    if (halftrack > 83) { halftrack = 83; }
+    head_halftrack = halftrack;
+    head_bit = 0;
+}
 
 // The lines the drive pulls low, in the shared IEC_PULL_* convention: DATA out
 // (VIA1 PB1) and CLK out (PB3), plus the ATN acknowledge hardware, which pulls
