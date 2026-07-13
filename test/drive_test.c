@@ -418,6 +418,291 @@ static void test_load_program(void) {
     CHECK_EQ(mem_read(0xC100), 0x42, "the loaded program runs and writes $42 to $C100");
 }
 
+// ---- Phase 6e: write support (SAVE, NEW), the DOS as the witness -------------
+
+// A blank image with a chosen disk id in the header field ($A2/$A3 of track 18
+// sector 0), so the GCR headers the mount builds carry that id. The DOS's own NEW
+// then lays down the BAM and directory; no BAM or directory bytes are hand-authored.
+static void blank_image(uint8_t *d, char id1, char id2) {
+    memset(d, 0, D64_STD_SIZE);
+    unsigned b = d64_off(18u, 0u);
+    d[b + 0xA2u] = (uint8_t)id1;
+    d[b + 0xA3u] = (uint8_t)id2;
+}
+
+// Send a command string to the DOS command channel (device 8, secondary 15) via
+// OPEN, then CLOSE. Returns true if the routine ran to completion.
+static bool dos_command(const char *cmd, uint8_t len, int budget) {
+    for (uint8_t i = 0; i < len; i++) { mem_write((uint16_t)(0xC300 + i), (uint8_t)cmd[i]); }
+    uint8_t prog[] = {
+        0xA9, 0x0F, 0xA2, 0x08, 0xA0, 0x0F, 0x20, 0xBA, 0xFF,   // SETLFS 15,8,15
+        0xA9, len, 0xA2, 0x00, 0xA0, 0xC3, 0x20, 0xBD, 0xFF,    // SETNAM len,$C300
+        0x20, 0xC0, 0xFF,                                        // OPEN (sends the command)
+        0xA9, 0x0F, 0x20, 0xC3, 0xFF,                           // CLOSE 15
+        0xA9, 0xAA, 0x8D, 0xF0, 0xC1, 0x4C, 0x21, 0xC0,
+    };
+    for (unsigned i = 0; i < sizeof(prog); i++) { mem_write((uint16_t)(0xC000 + i), prog[i]); }
+    mem_write(0xC1F0, 0);
+    cpu.pc = 0xC000; cpu.cycle = 0;
+    for (int f = 0; f < budget && mem_read(0xC1F0) != 0xAA; f++) { iec_step_frame(); }
+    return mem_read(0xC1F0) == 0xAA;
+}
+
+// Read the DOS error channel into buf (NUL-terminated). Returns the byte count.
+static int dos_error(char *buf, int max) {
+    uint8_t prog[] = {
+        0xA9, 0x08, 0x20, 0xB4, 0xFF, 0xA9, 0x6F, 0x20, 0x96, 0xFF, 0xA2, 0x00,
+        0x20, 0xA5, 0xFF, 0x9D, 0x00, 0xC6, 0xE8, 0xA5, 0x90, 0xF0, 0xF5,
+        0x20, 0xAB, 0xFF, 0x8E, 0xFF, 0xC5, 0x4C, 0x1D, 0xC0,
+    };
+    for (unsigned i = 0; i < sizeof(prog); i++) { mem_write((uint16_t)(0xC000 + i), prog[i]); }
+    mem_write(0xC5FF, 0);
+    cpu.pc = 0xC000; cpu.cycle = 0;
+    for (int f = 0; f < 400 && cpu.pc != 0xC01D; f++) { iec_step_frame(); }
+    int n = mem_read(0xC5FF);
+    int i = 0;
+    for (; i < n && i < max - 1; i++) {
+        uint8_t c = mem_read((uint16_t)(0xC600 + i));
+        buf[i] = (c == '\r') ? '\0' : (char)c;
+    }
+    buf[i] = '\0';
+    return n;
+}
+
+// KERNAL SAVE of memory [start, end) as a PRG named at $C300. Returns completion.
+static bool kernal_save(const char *name, uint8_t nlen, uint16_t start, uint16_t end) {
+    for (uint8_t i = 0; i < nlen; i++) { mem_write((uint16_t)(0xC300 + i), (uint8_t)name[i]); }
+    mem_write(0x00FB, (uint8_t)(start & 0xFFu));
+    mem_write(0x00FC, (uint8_t)(start >> 8));
+    uint8_t prog[] = {
+        0xA9, 0x01, 0xA2, 0x08, 0xA0, 0x01, 0x20, 0xBA, 0xFF,          // SETLFS 1,8,1
+        0xA9, nlen, 0xA2, 0x00, 0xA0, 0xC3, 0x20, 0xBD, 0xFF,          // SETNAM nlen,$C300
+        0xA9, 0xFB, 0xA2, (uint8_t)(end & 0xFFu), 0xA0, (uint8_t)(end >> 8),
+        0x20, 0xD8, 0xFF,                                               // SAVE $FB, end X/Y
+        0xA9, 0xAA, 0x8D, 0xF0, 0xC1, 0x4C, 0x22, 0xC0,
+    };
+    for (unsigned i = 0; i < sizeof(prog); i++) { mem_write((uint16_t)(0xC000 + i), prog[i]); }
+    mem_write(0xC1F0, 0);
+    cpu.pc = 0xC000; cpu.cycle = 0;
+    for (int f = 0; f < 40000 && mem_read(0xC1F0) != 0xAA; f++) { iec_step_frame(); }
+    return mem_read(0xC1F0) == 0xAA;
+}
+
+// The blocks-free total from a BAM sector's per-track free counts (track 18, the
+// directory track, is excluded). Source: the 1541 BAM layout, one entry per track
+// at offset 4 + (track-1)*4, its first byte the count of free sectors.
+static unsigned bam_blocks_free(const uint8_t *bam) {
+    unsigned free = 0;
+    for (unsigned t = 1; t <= 35u; t++) {
+        if (t == 18u) { continue; }
+        free += bam[4u + (t - 1u) * 4u];
+    }
+    return free;
+}
+// True if (track, sector) reads as allocated (used) in the BAM: the sector's bit in
+// the 3-byte bitmap after the free count is clear. Source: the 1541 BAM layout.
+static bool bam_sector_used(const uint8_t *bam, unsigned track, unsigned sector) {
+    unsigned e = 4u + (track - 1u) * 4u;
+    uint8_t bits = bam[e + 1u + sector / 8u];
+    return (bits & (uint8_t)(1u << (sector % 8u))) == 0u;
+}
+
+// A disk the DOS itself formatted, snapshot once and reused: full-format NEW works
+// from a blank image (quick NEW needs an already-formatted disk), and formatting all
+// 35 tracks is slow, so it is done a single time. No BAM or directory byte is ever
+// hand-authored; the golden image is entirely the DOS's own output.
+static uint8_t g_golden[D64_STD_SIZE];
+static bool g_golden_ready;
+static void snapshot_golden(void) {
+    for (unsigned t = 1; t <= 35u; t++) {
+        for (unsigned s = 0; s < d64_sec_in_track(t); s++) {
+            disk_read_sector(t, s, &g_golden[d64_off(t, s)]);
+        }
+    }
+    g_golden_ready = true;
+}
+static void ensure_golden(void) {
+    if (g_golden_ready) { return; }
+    static uint8_t img[D64_STD_SIZE];
+    blank_image(img, 'A', 'B');
+    boot_full(img);
+    dos_command("N0:MYDISK,AB", 12u, 60000);  // full format writes every track
+    snapshot_golden();
+}
+
+// NEW initialises the disk: a full-format NEW from a blank image, then LOAD "$",8
+// shows an empty disk with the name and id from the command and the full blocks-free
+// count. The BAM and directory are the DOS's own, written through the surface.
+// Source: DOS NEW command and the directory/BAM format (Immers & Neufeld).
+static void test_new_directory(void) {
+    if (!roms_present()) { SKIP("NEW directory", "C64 or 1541 ROM absent"); return; }
+    static uint8_t img[D64_STD_SIZE];
+    blank_image(img, 'A', 'B');
+    boot_full(img);
+    CHECK(dos_command("N0:MYDISK,AB", 12u, 60000), "NEW (full format) runs");
+    char err[64];
+    dos_error(err, sizeof(err));
+    CHECK(strncmp(err, "00", 2) == 0, "NEW reports 00 (OK) on the error channel");
+    uint16_t end = 0;
+    CHECK(kernal_load(0, "$", 1, 0x01, 0x08, &end) && end > 0x0801, "LOAD \"$\",8 after NEW");
+    char dir[256];
+    unsigned len = 0;
+    for (uint16_t a = 0x0801; a < end && len < sizeof(dir) - 1u; a++) {
+        uint8_t c = mem_read(a);
+        dir[len++] = (c >= 32 && c < 127) ? (char)c : ' ';
+    }
+    dir[len] = '\0';
+    CHECK(strstr(dir, "MYDISK") != NULL, "directory shows the NEW disk name");
+    CHECK(strstr(dir, "AB") != NULL, "directory shows the disk id");
+    CHECK(strstr(dir, "BLOCKS FREE") != NULL, "the directory shows a blocks-free line");
+    // The exact count is a binary BASIC line number in the listing, not ASCII text,
+    // so it is asserted from the BAM, the authoritative source: 683 - 19 (track 18).
+    uint8_t bam[256];
+    CHECK(disk_read_sector(18, 0, bam), "BAM sector reads back off the surface");
+    CHECK_EQ(bam_blocks_free(bam), 664u, "BAM free-count total is 664 (683 - track 18's 19)");
+    CHECK_EQ(bam[2], 0x41u, "BAM format version byte is $41 ('A')");
+    snapshot_golden();  // reuse this DOS-formatted disk for the SAVE tests
+}
+
+// SAVE then LOAD: the bytes survive the surface. The disk is the DOS-formatted
+// golden image, so no disk bytes are hand-authored. Source: KERNAL SAVE/LOAD.
+static void test_save_load_roundtrip(void) {
+    if (!roms_present()) { SKIP("SAVE round trip", "C64 or 1541 ROM absent"); return; }
+    ensure_golden();
+    boot_full(g_golden);
+    for (unsigned i = 0; i < 32u; i++) { mem_write((uint16_t)(0xC200 + i), (uint8_t)(0x40u + i)); }
+    CHECK(kernal_save("DATA", 4u, 0xC200, 0xC220), "SAVE \"DATA\" of 32 bytes at $C200");
+    char err[64];
+    dos_error(err, sizeof(err));
+    CHECK(strncmp(err, "00", 2) == 0, "SAVE reports 00 (OK)");
+    for (unsigned i = 0; i < 40u; i++) { mem_write((uint16_t)(0xC400 + i), 0); }
+    uint16_t end = 0;
+    CHECK(kernal_load(0, "DATA", 4u, 0x00, 0xC4, &end), "LOAD \"DATA\" back to $C400");
+    CHECK_EQ(end, 0xC420u, "loaded 32 bytes ($C400..$C41F)");
+    int match = 1;
+    for (unsigned i = 0; i < 32u; i++) {
+        if (mem_read((uint16_t)(0xC400 + i)) != (uint8_t)(0x40u + i)) { match = 0; }
+    }
+    CHECK_EQ(match, 1, "the 32 saved bytes reloaded identically");
+}
+
+// After a SAVE the BAM marks exactly the blocks used, and a second SAVE lands on
+// different blocks, not on top of the first. The BAM is read back off the surface
+// and the directory gives each file's first data block. Source: 1541 BAM/directory.
+static void test_bam_after_save(void) {
+    if (!roms_present()) { SKIP("BAM after save", "C64 or 1541 ROM absent"); return; }
+    ensure_golden();
+    boot_full(g_golden);
+    uint8_t bam[256], dir[256];
+    CHECK(disk_read_sector(18, 0, bam), "BAM reads back");
+    CHECK_EQ(bam_blocks_free(bam), 664u, "664 free before any save");
+
+    for (unsigned i = 0; i < 16u; i++) { mem_write((uint16_t)(0xC200 + i), (uint8_t)(0x10u + i)); }
+    CHECK(kernal_save("F1", 2u, 0xC200, 0xC210), "SAVE F1 (one block)");
+    CHECK(disk_read_sector(18, 0, bam), "BAM reads back after F1");
+    CHECK_EQ(bam_blocks_free(bam), 663u, "one block used after F1");
+    CHECK(disk_read_sector(18, 1, dir), "directory reads back after F1");
+    unsigned t1 = dir[3], s1 = dir[4];
+    CHECK(bam_sector_used(bam, t1, s1), "F1's data block is marked used in the BAM");
+
+    for (unsigned i = 0; i < 16u; i++) { mem_write((uint16_t)(0xC200 + i), (uint8_t)(0x70u + i)); }
+    CHECK(kernal_save("F2", 2u, 0xC200, 0xC210), "SAVE F2 (one block)");
+    CHECK(disk_read_sector(18, 0, bam), "BAM reads back after F2");
+    CHECK_EQ(bam_blocks_free(bam), 662u, "two blocks used after F2");
+    CHECK(disk_read_sector(18, 1, dir), "directory reads back after F2");
+    unsigned t2 = dir[2 + 32 + 1], s2 = dir[2 + 32 + 2];  // entry 1 track/sector
+    CHECK(!(t2 == t1 && s2 == s1), "F2 landed on a different block than F1");
+    CHECK(bam_sector_used(bam, t2, s2), "F2's data block is marked used too");
+}
+
+// Write-back: a cleanly mounted file is serialised back on request and the saved
+// program is in the file afterwards; an in-memory mount (no file) is refused, so a
+// file we did not mount cleanly is never touched. Source: the write-back contract.
+static void test_writeback(void) {
+    if (!roms_present()) { SKIP("write-back", "C64 or 1541 ROM absent"); return; }
+    const char *path = "/tmp/claude-1000/-home-chronocoder/22621c68-1b4e-4036-a32e-6c77a56f17d7/scratchpad/wb_test.d64";
+
+    // An in-memory mount has no path: write-back must refuse.
+    ensure_golden();
+    CHECK(disk_mount_image(g_golden, D64_STD_SIZE), "in-memory image mounts");
+    CHECK(!disk_writeback(), "write-back refuses an image mounted without a path");
+
+    // Lay the DOS-formatted golden image down as a file, mount it cleanly, save.
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL, "temp .d64 opens for writing");
+    if (f) { fwrite(g_golden, 1u, D64_STD_SIZE, f); fclose(f); }
+    mem_init(); cpu_init(); vic_init(); cia_init(); sid_init();
+    mem_load_rom(ROM_KERNAL, "rom/kernal.rom");
+    mem_load_rom(ROM_BASIC, "rom/basic.rom");
+    mem_load_rom(ROM_CHAR, "rom/chargen.rom");
+    drive_init(); drive_load_rom("rom/1541.rom");
+    cpu_reset(); drive_reset(); iec_reset();
+    CHECK(disk_mount(path), "the .d64 file mounts cleanly");
+    for (int fr = 0; fr < 250; fr++) { iec_step_frame(); }
+    for (unsigned i = 0; i < 16u; i++) { mem_write((uint16_t)(0xC200 + i), (uint8_t)(0xA0u + i)); }
+    CHECK(kernal_save("WB", 2u, 0xC200, 0xC210), "SAVE WB into the mounted file");
+
+    uint8_t dir[256];
+    CHECK(disk_read_sector(18, 1, dir), "directory reads back");
+    unsigned ft = dir[3], fs = dir[4];  // WB's first data block
+
+    CHECK(disk_writeback(), "write-back writes a cleanly mounted file");
+
+    // Read the file straight off disk: the data block holds the load address and
+    // the saved bytes (offset 2 past the block's track/sector link).
+    static uint8_t reread[D64_STD_SIZE];
+    FILE *g = fopen(path, "rb");
+    CHECK(g != NULL, "written .d64 reopens");
+    size_t got = g ? fread(reread, 1u, D64_STD_SIZE, g) : 0;
+    if (g) { fclose(g); }
+    CHECK_EQ((int)got, D64_STD_SIZE, "written .d64 is a full 174848-byte image");
+    unsigned dblk = d64_off(ft, fs);
+    CHECK_EQ(reread[dblk + 2], 0x00u, "file load address low in the block ($C200 -> $00)");
+    CHECK_EQ(reread[dblk + 3], 0xC2u, "file load address high in the block ($C200 -> $C2)");
+    int match = 1;
+    for (unsigned i = 0; i < 16u; i++) {
+        if (reread[dblk + 4u + i] != (uint8_t)(0xA0u + i)) { match = 0; }
+    }
+    CHECK_EQ(match, 1, "the saved program bytes are in the written .d64 file");
+}
+
+// The BAM is actually searched: fill the directory-adjacent track 17 (and more) with
+// a large file, then save a small file. The DOS cannot take the first block near the
+// directory, so it must walk the map to free space further out; the small file lands
+// off track 17 and still reloads byte-for-byte. Source: the 1541 block-allocation
+// order (data starts at track 17) and the BAM search.
+static void test_bam_near_full(void) {
+    if (!roms_present()) { SKIP("BAM search near-full", "C64 or 1541 ROM absent"); return; }
+    ensure_golden();
+    boot_full(g_golden);
+    for (unsigned i = 0; i < 0x1A00u; i++) { mem_write((uint16_t)(0x2000 + i), (uint8_t)(i * 7u + 1u)); }
+    CHECK(kernal_save("FILL", 4u, 0x2000, 0x3A00), "SAVE a file large enough to fill track 17 (~26 blocks)");
+    uint8_t dir[256];
+    CHECK(disk_read_sector(18, 1, dir), "directory reads back after FILL");
+    CHECK_EQ(dir[3], 17u, "the large file's data starts on track 17 (nearest the directory)");
+
+    for (unsigned i = 0; i < 16u; i++) { mem_write((uint16_t)(0xC200 + i), (uint8_t)(0x30u + i)); }
+    CHECK(kernal_save("TAIL", 4u, 0xC200, 0xC210), "SAVE a small file after track 17 is full");
+    char err[64];
+    dos_error(err, sizeof(err));
+    CHECK(strncmp(err, "00", 2) == 0, "the second SAVE reports 00 (OK)");
+    CHECK(disk_read_sector(18, 1, dir), "directory reads back after TAIL");
+    unsigned tt = dir[2 + 32 + 1], ts = dir[2 + 32 + 2];  // entry 1 (TAIL) track/sector
+    CHECK(tt != 17u, "TAIL was placed off the full track 17: the DOS walked the BAM");
+    uint8_t bam[256];
+    CHECK(disk_read_sector(18, 0, bam), "BAM reads back");
+    CHECK(bam_sector_used(bam, tt, ts), "TAIL's block is marked used in the BAM");
+
+    for (unsigned i = 0; i < 24u; i++) { mem_write((uint16_t)(0xC400 + i), 0); }
+    uint16_t end = 0;
+    CHECK(kernal_load(0, "TAIL", 4u, 0x00, 0xC4, &end), "LOAD TAIL back from the fragmented disk");
+    int match = 1;
+    for (unsigned i = 0; i < 16u; i++) {
+        if (mem_read((uint16_t)(0xC400 + i)) != (uint8_t)(0x30u + i)) { match = 0; }
+    }
+    CHECK_EQ(match, 1, "the file saved into non-adjacent free space reloads identically");
+}
+
 int main(void) {
     TEST_BEGIN("drive");
     const char *synth = "/tmp/claude-1000/-home-chronocoder/22621c68-1b4e-4036-a32e-6c77a56f17d7/scratchpad/synth1541_dt.rom";
@@ -435,5 +720,10 @@ int main(void) {
     test_disk_optional();
     test_load_directory();
     test_load_program();
+    test_new_directory();
+    test_save_load_roundtrip();
+    test_bam_after_save();
+    test_bam_near_full();
+    test_writeback();
     return TEST_SUMMARY("drive");
 }

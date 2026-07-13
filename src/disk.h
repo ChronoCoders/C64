@@ -49,4 +49,23 @@ bool gcr_decode(const uint8_t *in, unsigned in_len, uint8_t *out);
 uint8_t disk_header_checksum(uint8_t sector, uint8_t track, uint8_t id2, uint8_t id1);
 uint8_t disk_data_checksum(const uint8_t *data256);
 
+// ---- Write path (Phase 6e) --------------------------------------------------
+
+// Write value's 8 bits (MSB first) into the track's GCR ring at bit_index, wrapping
+// at the track length. This is the write head laying flux: the drive calls it once
+// per byte while the DOS is in write mode. No-op if no disk or track out of range.
+void disk_write_gcr_byte(unsigned track, unsigned bit_index, uint8_t value);
+
+// Decode a sector's 256 data bytes back out of the GCR ring, by finding the header
+// that identifies (track, sector) and then the data block that follows it. Returns
+// false if no disk, the track is out of range, or the sector is not found/valid.
+// Used to serialise the surface back to a .d64 and to inspect written sectors.
+bool disk_read_sector(unsigned track, unsigned sector, uint8_t out[256]);
+
+// Serialise the surface back to the file it was mounted from, on a clean exit.
+// Only writes an image mounted cleanly from a path (disk_mount); an in-memory mount
+// (disk_mount_image) or no mount leaves the file alone. Returns true only if a file
+// was written. Never truncates or partially writes a file it did not mount cleanly.
+bool disk_writeback(void);
+
 #endif // DISK_H

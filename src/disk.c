@@ -111,6 +111,8 @@ uint8_t disk_data_checksum(const uint8_t *data256) {
 // ---- The mounted image and its GCR rings ------------------------------------
 static uint8_t image[D64_STD_SIZE];
 static bool mounted;
+static bool clean_path;             // mounted from a validated file, so write-back is safe
+static char mount_path[4096];
 static uint8_t disk_id1, disk_id2;
 static uint8_t gcr_tracks[DISK_TRACKS][GCR_TRACK_MAXBYTES];
 static unsigned gcr_nbytes[DISK_TRACKS];
@@ -195,11 +197,20 @@ bool disk_mount(const char *path) {
     int extra = fgetc(f);  // reject anything longer than a standard image
     fclose(f);
     if (n != D64_STD_SIZE || extra != EOF) { return false; }
-    return mount_validate_and_build();
+    if (!mount_validate_and_build()) { return false; }
+    // Remember where a clean 35-track image came from, so it can be written back.
+    size_t plen = strlen(path);
+    if (plen < sizeof(mount_path)) {
+        memcpy(mount_path, path, plen + 1u);
+        clean_path = true;
+    }
+    return true;
 }
 
 void disk_unmount(void) {
     mounted = false;
+    clean_path = false;
+    mount_path[0] = '\0';
     memset(gcr_nbytes, 0, sizeof(gcr_nbytes));
 }
 bool disk_present(void) { return mounted; }
@@ -211,4 +222,86 @@ const uint8_t *disk_track_gcr(unsigned track, unsigned *nbits) {
     }
     *nbits = gcr_nbytes[track - 1u] * 8u;
     return gcr_tracks[track - 1u];
+}
+
+// ---- Write path -------------------------------------------------------------
+
+void disk_write_gcr_byte(unsigned track, unsigned bit_index, uint8_t value) {
+    if (!mounted || track < 1u || track > DISK_TRACKS) { return; }
+    unsigned nbits = gcr_nbytes[track - 1u] * 8u;
+    if (nbits == 0u) { return; }
+    uint8_t *buf = gcr_tracks[track - 1u];
+    for (unsigned i = 0; i < 8u; i++) {
+        unsigned p = (bit_index + i) % nbits;
+        if ((value >> (7u - i)) & 1u) { buf[p >> 3] |= (uint8_t)(0x80u >> (p & 7u)); }
+        else { buf[p >> 3] &= (uint8_t)~(0x80u >> (p & 7u)); }
+    }
+}
+
+static unsigned ring_bit(const uint8_t *ring, unsigned p) {
+    return (ring[p >> 3] >> (7u - (p & 7u))) & 1u;
+}
+// Advance *pos to the first bit after the next SYNC (>= 10 one-bits): the byte
+// boundary the hardware frames to. Returns false if no SYNC within the budget.
+static bool ring_find_sync(const uint8_t *ring, unsigned nbits, unsigned *pos, unsigned budget) {
+    unsigned ones = 0;
+    while (budget-- > 0u) {
+        unsigned b = ring_bit(ring, *pos);
+        if (b == 0u && ones >= 10u) { return true; }  // *pos is at the first block bit
+        ones = b ? (ones + 1u) : 0u;
+        *pos = (*pos + 1u) % nbits;
+    }
+    return false;
+}
+static void ring_read(const uint8_t *ring, unsigned nbits, unsigned *pos, uint8_t *out, unsigned n) {
+    for (unsigned i = 0; i < n; i++) {
+        uint8_t v = 0;
+        for (unsigned k = 0; k < 8u; k++) {
+            v = (uint8_t)((v << 1) | ring_bit(ring, *pos));
+            *pos = (*pos + 1u) % nbits;
+        }
+        out[i] = v;
+    }
+}
+
+bool disk_read_sector(unsigned track, unsigned sector, uint8_t out[256]) {
+    unsigned nbits = 0;
+    const uint8_t *ring = disk_track_gcr(track, &nbits);
+    if (ring == NULL || nbits == 0u) { return false; }
+    unsigned pos = 0;
+    // Two full revolutions' worth of SYNC marks is more than enough to see every
+    // sector regardless of where the scan starts.
+    unsigned tries = disk_sectors_in_track(track) * 4u + 4u;
+    while (tries-- > 0u) {
+        if (!ring_find_sync(ring, nbits, &pos, nbits * 2u)) { return false; }
+        uint8_t hdr_gcr[10], hdr[8];
+        ring_read(ring, nbits, &pos, hdr_gcr, 10u);
+        if (!gcr_decode(hdr_gcr, 10u, hdr)) { continue; }
+        if (hdr[0] != 0x08u || hdr[3] != (uint8_t)track || hdr[2] != (uint8_t)sector) { continue; }
+        if (!ring_find_sync(ring, nbits, &pos, nbits)) { return false; }
+        uint8_t data_gcr[325], data[260];
+        ring_read(ring, nbits, &pos, data_gcr, 325u);
+        if (!gcr_decode(data_gcr, 325u, data) || data[0] != 0x07u) { return false; }
+        memcpy(out, &data[1], 256u);
+        return true;
+    }
+    return false;
+}
+
+bool disk_writeback(void) {
+    if (!mounted || !clean_path) { return false; }
+    for (unsigned t = 1; t <= DISK_TRACKS; t++) {
+        unsigned nsec = disk_sectors_in_track(t);
+        for (unsigned s = 0; s < nsec; s++) {
+            uint8_t buf[256];
+            if (disk_read_sector(t, s, buf)) {   // else keep the mounted bytes
+                memcpy(&image[sector_offset(t, s)], buf, 256u);
+            }
+        }
+    }
+    FILE *f = fopen(mount_path, "wb");
+    if (f == NULL) { return false; }
+    size_t n = fwrite(image, 1u, D64_STD_SIZE, f);
+    fclose(f);
+    return n == D64_STD_SIZE;
 }

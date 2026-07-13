@@ -64,6 +64,7 @@ static unsigned bit_in_byte;   // bits accumulated toward the current GCR byte
 static bool sync_active;        // head is currently over a SYNC mark
 static uint8_t read_byte;        // last assembled GCR byte, presented on VIA2 PA
 static bool byte_ready;          // BYTE READY asserted on this drive cycle
+static bool write_prev;          // head was in write mode on the previous step
 
 // A DATA or CLK line is low if the drive drives its OUT bit or the external bus
 // pulls it; ATN is driven only by the controller. The serial IN lines are
@@ -157,6 +158,7 @@ static void reset_read_state(void) {
     sync_active = false;
     read_byte = 0xFFu;
     byte_ready = false;
+    write_prev = false;
 }
 
 void drive_init(void) {
@@ -202,13 +204,22 @@ bool drive_load_rom(const char *path) {
 
 bool drive_present(void) { return rom_loaded; }
 
-// Advance the read head by the bits that elapse in one drive (1 MHz) cycle. A
-// bit-cell lasts (byte_cycles*2) periods of the 16 MHz read clock; one drive cycle
-// is 16 of those periods, so the accumulator advances the head at the zone's exact
-// bit rate with integer arithmetic. The disk turns only while the motor (VIA2 PB2)
-// runs; between valid tracks there is no signal. When eight bits assemble outside a
-// SYNC, BYTE READY fires: latch the byte, pull VIA2 CA1 and the CPU SO line low.
-static void disk_read_step(void) {
+// Fire BYTE READY for this cycle: latch nothing more, just pull VIA2 CA1 and the
+// CPU SO line low for one drive cycle (released at the top of the next step).
+static void byte_ready_pulse(void) {
+    byte_ready = true;
+    drive.so_line = 0;            // negative edge on SO sets V (the DOS branches on it)
+    via_set_ca1(&via2, false);    // BYTE READY low -> VIA2 CA1 edge
+}
+
+// Advance the head by the bits that elapse in one drive (1 MHz) cycle. A bit-cell
+// lasts (byte_cycles*2) periods of the 16 MHz clock; one drive cycle is 16 of those,
+// so the accumulator advances the head at the zone's exact bit rate with integer
+// arithmetic. The disk turns only while the motor (VIA2 PB2) runs. VIA2 Port A drives
+// the head: with DDRA all-outputs the DOS is writing, so each byte the DOS put in the
+// port is laid into the ring; otherwise the head reads, assembling bytes and framing
+// on SYNC. Either way BYTE READY fires every eight bit-cells to pace the DOS.
+static void disk_head_step(void) {
     if (byte_ready) {                     // release the previous cycle's pulse
         byte_ready = false;
         drive.so_line = 1;
@@ -217,6 +228,7 @@ static void disk_read_step(void) {
     bool motor_on = (via2.orb & via2.ddrb & 0x04u) != 0;
     if (!disk_present() || !motor_on) {
         sync_active = false;
+        write_prev = false;
         return;
     }
     unsigned track = (unsigned)(head_halftrack / 2) + 1u;
@@ -224,15 +236,31 @@ static void disk_read_step(void) {
     const uint8_t *ring = disk_track_gcr(track, &nbits);
     if (ring == NULL || nbits == 0u) {    // half-track gap or beyond track 35
         sync_active = false;
+        write_prev = false;
         return;
     }
+    bool write_mode = (via2.ddra == 0xFFu);  // Port A all-outputs: the DOS is writing
+    if (write_mode && !write_prev) { bit_in_byte = 0; }  // fresh byte framing on entry
+    write_prev = write_mode;
     unsigned divisor = disk_track_byte_cycles(track) * 2u;
     bitcell_acc += 16u;
     while (bitcell_acc >= divisor) {
         bitcell_acc -= divisor;
-        unsigned bit = (ring[head_bit >> 3] >> (7u - (head_bit & 7u))) & 1u;
         head_bit++;
         if (head_bit >= nbits) { head_bit = 0; }
+        if (write_mode) {
+            sync_active = false;
+            ones_run = 0;
+            if (++bit_in_byte >= 8u) {     // a whole byte has clocked out of the port
+                bit_in_byte = 0;
+                unsigned start = (head_bit + nbits - 8u) % nbits;
+                disk_write_gcr_byte(track, start, via2.ora);
+                byte_ready_pulse();
+            }
+            continue;
+        }
+        unsigned prev = (head_bit == 0u) ? (nbits - 1u) : (head_bit - 1u);
+        unsigned bit = (ring[prev >> 3] >> (7u - (prev & 7u))) & 1u;
         read_shift = (read_shift << 1) | bit;
         if (bit) { ones_run++; } else { ones_run = 0; }
         if (ones_run >= 10u) {
@@ -244,16 +272,14 @@ static void disk_read_step(void) {
             if (bit_in_byte >= 8u) {
                 bit_in_byte = 0;
                 read_byte = (uint8_t)(read_shift & 0xFFu);
-                byte_ready = true;
-                drive.so_line = 0;            // negative edge on SO sets V
-                via_set_ca1(&via2, false);    // BYTE READY low -> VIA2 CA1 edge
+                byte_ready_pulse();
             }
         }
     }
 }
 
 void drive_tick(void) {
-    disk_read_step();  // the surface under the head, ahead of sampling this cycle
+    disk_head_step();  // the surface under the head, ahead of sampling this cycle
     // ATN reaches VIA1 CA1 inverted: CA1 is high when ATN is asserted (the C64
     // pulls it low), so the C64 asserting ATN is a rising edge, which the DOS
     // interrupts on to leave its idle loop.

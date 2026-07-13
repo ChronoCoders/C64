@@ -78,6 +78,9 @@ static int run_visible(void) {
     }
     host_audio_shutdown();
     host_shutdown();
+    if (disk_writeback()) {  // persist a SAVE back to the .d64 on a clean exit
+        printf("1541: wrote the disk image back to its file.\n");
+    }
     return 0;
 }
 
@@ -100,6 +103,9 @@ static int run_headless(void) {
            vic_read(0xD021) & 0x0F);
     printf("  note            KERNAL booted to READY and idles in the keyboard "
            "scan; the full machine (both CIAs, the 1541 drive) is present.\n");
+    if (disk_writeback()) {
+        printf("1541: wrote the disk image back to its file.\n");
+    }
     return 0;
 }
 
