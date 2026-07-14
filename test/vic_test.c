@@ -607,6 +607,69 @@ static void test_rsel_csel_window(void) {
           "RSEL/CSEL: the four window combinations produce four distinct frames");
 }
 
+// ---- Phase 7 step 5: border flip-flops -------------------------------------
+//
+// A geometric window and the flip-flops are identical under static RSEL/CSEL, so
+// these tests change a bit MID-FRAME and observe that the border latches rather
+// than re-evaluating. Both fail against the committed step-4 geometry, which
+// recomputes the window every pixel and paints border regardless.
+#define P7_ROW(l) ((size_t)((l) - 15u) * VIC_FB_WIDTH)  // framebuffer row of raster line l
+
+static void p7_tick_to(uint16_t line, uint16_t cyc) {
+    while (!(vic.raster_line == line && vic.raster_cycle == cyc)) {
+        vic_tick();
+    }
+}
+
+// Open the right border: on a display line, switch CSEL 1->0 after the raster has
+// passed the CSEL=0 right comparison but before the CSEL=1 one, so rule 1 never
+// fires and the main border stays open. A column that is border under both static
+// CSEL values then shows background instead. Fails against step 4 (geometry paints
+// col 360 border for either CSEL).
+static void test_border_open_side(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    uint32_t blue = p7_palette(6);
+    uint32_t red = p7_palette(2);
+    p7_fill(0x01u, 0xFFu, 0x01u);   // solid white screen
+    vic_write(0x21, 0x06);          // background blue
+    vic_write(0x20, 0x02);          // border red
+    vic_write(0x11, 0x1Bu);         // DEN, RSEL, YSCROLL 3
+    vic_write(0x16, 0x08u);         // CSEL = 1
+    p7_tick_to(150, 54);            // bc55 (cols 344-351) rendered with CSEL=1
+    vic_write(0x16, 0x00u);         // CSEL -> 0: right comparison (343) already passed
+    p7_tick_to(151, 0);             // finish line 150 with the border held open
+    const uint32_t *fb = vic_framebuffer();
+    size_t row = P7_ROW(150);
+    CHECK_EQ(fb[row + 200], white, "open side border: normal display columns still render");
+    CHECK(fb[row + 360] != red, "open side border: col 360 is not border");
+    CHECK_EQ(fb[row + 360], blue, "open side border: col 360 shows background, border held open");
+}
+
+// Open the bottom border: switch RSEL 1->0 at the start of the bottom-comparison
+// line (251) before its cycle-16 and cycle-63 checks, so neither bottom value
+// (251 for RSEL=1, 247 for RSEL=0) matches and the vertical border never sets. The
+// display then continues into raster line 251, which is border under any static
+// RSEL. Fails against step 4 (line 251 > the geometric last line, always border).
+static void test_border_open_vertical(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    uint32_t red = p7_palette(2);
+    p7_fill(0x01u, 0xFFu, 0x01u);   // solid white screen
+    vic_write(0x21, 0x06);          // background blue
+    vic_write(0x20, 0x02);          // border red
+    vic_write(0x11, 0x1Bu);         // DEN, RSEL = 1, YSCROLL 3
+    vic_write(0x16, 0x08u);         // CSEL = 1
+    p7_tick_to(251, 0);             // reach line 251 before its bottom comparisons
+    vic_write(0x11, 0x13u);         // RSEL -> 0: bottom value (247) already passed
+    p7_tick_to(252, 0);             // finish line 251 with the vertical border open
+    const uint32_t *fb = vic_framebuffer();
+    size_t row = P7_ROW(251);
+    CHECK(fb[row + 5] == red, "line 251: side border still closed at the far left");
+    CHECK(fb[row + 200] != red, "open bottom border: line 251 col 200 is not border");
+    CHECK_EQ(fb[row + 200], white, "open bottom border: display continues into line 251");
+}
+
 int main(void) {
     TEST_BEGIN("vic");
     test_raster_advance_and_read();
@@ -632,5 +695,7 @@ int main(void) {
     test_collision_mc_bitmap_pair11();
     test_collision_border_no_collide();
     test_rsel_csel_window();
+    test_border_open_side();
+    test_border_open_vertical();
     return TEST_SUMMARY("vic");
 }

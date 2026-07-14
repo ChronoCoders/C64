@@ -95,6 +95,12 @@ static uint8_t rc;           // row counter within a text row (0-7)
 static bool display_state;   // display vs idle
 static bool den_frame;       // DEN was set during raster line $30 this frame
 
+// Border flip-flops (Bauer 3.9). Main gates the left/right edges, vertical the
+// top/bottom. Set means the pixel is border colour. Latched, not geometric: they
+// change only when a rule fires, which is what makes the open-border trick work.
+static bool border_main = true;
+static bool border_vert = true;
+
 // Rendering can be disabled for headless timing-only runs (the Lorenz runner):
 // badline detection and BA/RDY still run, only the pixel/fetch work is skipped.
 static bool render_on = true;
@@ -190,6 +196,8 @@ void vic_reset(void) {
     rc = 0;
     display_state = false;
     den_frame = false;
+    border_main = true;  // both flip-flops closed (border) out of reset
+    border_vert = true;
     stall_grace = STALL_GRACE_CYCLES;
     bus_ba = 1;
     irq_latch = 0;
@@ -208,7 +216,40 @@ static bool is_badline(uint16_t line) {
            (line & 7u) == (vic.reg[0x11] & 7u);
 }
 
-// Produce the 8 pixels of the current cell into the framebuffer.
+// Border flip-flop comparison values (Bauer 3.9), read live so a mid-frame RSEL/
+// CSEL change opens the border. Left/right are the framebuffer columns where rule 6
+// clears / rule 1 sets the main border (display spans [left, right-1]); top/bottom
+// are the raster lines where rules 3/5 clear / 2/4 set the vertical border (display
+// spans [top, bottom-1]). Single source: derived from the step-4 window constants.
+static unsigned border_left(void) {
+    return (vic.reg[0x16] & 0x08u) ? WIN_LEFT : WIN_LEFT + CSEL0_INSET_L;
+}
+static unsigned border_right(void) {
+    return ((vic.reg[0x16] & 0x08u) ? WIN_RIGHT : WIN_RIGHT - CSEL0_INSET_R) + 1u;
+}
+static unsigned border_top_line(void) {
+    return (vic.reg[0x11] & 0x08u) ? DISP_FIRST_LINE : DISP_FIRST_LINE + RSEL0_INSET;
+}
+static unsigned border_bot_line(void) {
+    return ((vic.reg[0x11] & 0x08u) ? DISP_LAST_LINE : DISP_LAST_LINE - RSEL0_INSET) + 1u;
+}
+
+// Rules 2 and 3: the cycle-63 vertical-border latch, run once per line. Separate
+// from render_cell (which does the per-pixel rules 1, 4, 5, 6) because cycle 63 is
+// off the right edge of the framebuffer.
+static void border_vert_latch(uint16_t line) {
+    if (line == border_bot_line()) {
+        border_vert = true;  // rule 2
+    }
+    if (line == border_top_line() && (vic.reg[0x11] & 0x10u)) {
+        border_vert = false;  // rule 3
+    }
+}
+
+// Produce the 8 pixels of the current cell into the framebuffer, gated per pixel by
+// the border flip-flops. Graphics are produced for the g-access cycles; elsewhere
+// the sequencer output is the background colour, which only shows if the border is
+// open there. Border pixels are not foreground for collision.
 static void render_cell(uint16_t line, unsigned bc) {
     if (line < FB_FIRST_LINE || line >= FB_FIRST_LINE + VIC_FB_HEIGHT) {
         return;  // off-screen vertically (vertical blanking / overscan)
@@ -218,110 +259,110 @@ static void render_cell(uint16_t line, unsigned bc) {
     }
     unsigned fbcol = (bc - FB_FIRST_BCYC) * 8u;
     size_t off = (size_t)(line - FB_FIRST_LINE) * VIC_FB_WIDTH + fbcol;
-
-    // RSEL/CSEL display window (Part 2), in framebuffer coordinates. The border is
-    // still computed from geometry here; the hardware border flip-flops (open-border
-    // tricks) are step 5. Border pixels are not foreground for collision.
-    bool rsel = (vic.reg[0x11] & 0x08u) != 0;
-    bool csel = (vic.reg[0x16] & 0x08u) != 0;
-    unsigned top = rsel ? DISP_FIRST_LINE : DISP_FIRST_LINE + RSEL0_INSET;
-    unsigned bot = rsel ? DISP_LAST_LINE : DISP_LAST_LINE - RSEL0_INSET;
-    unsigned left = csel ? WIN_LEFT : WIN_LEFT + CSEL0_INSET_L;
-    unsigned right = csel ? WIN_RIGHT : WIN_RIGHT - CSEL0_INSET_R;
     uint32_t border = PALETTE[vic.reg[0x20] & 0x0Fu];
 
-    // A cell fully outside the window (line out of range, or no column overlap) is
-    // all border. Overlap implies bc in [16,55], so buffer_char[col] is in range.
-    bool cell_in = den_frame && line >= top && line <= bot &&
-                   fbcol <= right && fbcol + 7u >= left;
-    if (!cell_in) {
-        for (unsigned px = 0; px < 8; px++) {
-            framebuffer[off + px] = border;
-            line_fg[fbcol + px] = 0;
-        }
-        return;
-    }
-
-    // Compute the 8 pixels of the cell into locals, then write them applying the
-    // column window (pixels outside [left,right] are border, e.g. under CSEL=0).
-    unsigned col = bc - GACCESS_FIRST;  // 0..39
-    bool ecm = (vic.reg[0x11] & 0x40u) != 0;   // $D011 bit 6
-    bool bmm = (vic.reg[0x11] & 0x20u) != 0;   // $D011 bit 5
-    bool mcm = (vic.reg[0x16] & 0x10u) != 0;   // $D016 bit 4
-    uint8_t vmd = buffer_char[col];            // video matrix byte (char code or bitmap colour)
-    uint8_t vcl = buffer_col[col];             // colour RAM nibble
-    uint32_t d021 = PALETTE[vic.reg[0x21] & 0x0Fu];
     uint32_t px_col[8];
     uint8_t px_fg[8];
-
-    if (ecm && (bmm || mcm)) {
-        // Invalid combinations (ECM together with BMM or MCM) output black.
+    bool gfx = den_frame && bc >= GACCESS_FIRST && bc <= GACCESS_LAST;
+    if (!gfx) {
+        uint32_t bg = PALETTE[vic.reg[0x21] & 0x0Fu];
         for (unsigned px = 0; px < 8; px++) {
-            px_col[px] = PALETTE[0];
+            px_col[px] = bg;
             px_fg[px] = 0;
         }
     } else {
-        // g-access: bitmap modes fetch the bitmap at VC*8; text the char generator.
-        uint8_t bits;
-        if (bmm) {
-            uint16_t base = (uint16_t)((vic.reg[0x18] & 0x08u) << 10);
-            bits = mem_vic_fetch((uint16_t)((base + (vcbase + col) * 8u + rc) & 0x3FFFu));
-        } else {
-            uint16_t base = (uint16_t)((vic.reg[0x18] & 0x0Eu) << 10);
-            uint8_t glyph = ecm ? (uint8_t)(vmd & 0x3Fu) : vmd;  // ECM steals the top 2 bits
-            bits = mem_vic_fetch((uint16_t)(base + glyph * 8u + rc));
-        }
-        // Bitmap MCM is always multicolor; text MCM is per-cell on colour-RAM bit 3.
-        bool multicolor = bmm ? mcm : (mcm && (vcl & 0x08u));
-        if (multicolor) {
-            uint32_t c[4];
-            c[0] = d021;
-            if (bmm) {  // multicolor bitmap
-                c[1] = PALETTE[vmd >> 4];
-                c[2] = PALETTE[vmd & 0x0Fu];
-                c[3] = PALETTE[vcl & 0x0Fu];
-            } else {    // multicolor text
-                c[1] = PALETTE[vic.reg[0x22] & 0x0Fu];
-                c[2] = PALETTE[vic.reg[0x23] & 0x0Fu];
-                c[3] = PALETTE[vcl & 0x07u];
-            }
+        unsigned col = bc - GACCESS_FIRST;  // 0..39
+        bool ecm = (vic.reg[0x11] & 0x40u) != 0;   // $D011 bit 6
+        bool bmm = (vic.reg[0x11] & 0x20u) != 0;   // $D011 bit 5
+        bool mcm = (vic.reg[0x16] & 0x10u) != 0;   // $D016 bit 4
+        uint8_t vmd = buffer_char[col];            // video matrix byte (char code or bitmap colour)
+        uint8_t vcl = buffer_col[col];             // colour RAM nibble
+        uint32_t d021 = PALETTE[vic.reg[0x21] & 0x0Fu];
+
+        if (ecm && (bmm || mcm)) {
+            // Invalid combinations (ECM together with BMM or MCM) output black.
             for (unsigned px = 0; px < 8; px++) {
-                unsigned pair = (bits >> (6u - (px & ~1u))) & 3u;  // [7:6][5:4][3:2][1:0]
-                px_col[px] = c[pair];
-                px_fg[px] = (pair & 2u) ? 1 : 0;                   // pairs 10/11 foreground
+                px_col[px] = PALETTE[0];
+                px_fg[px] = 0;
             }
         } else {
-            uint32_t fg, bg;
-            if (bmm) {          // standard bitmap: nibbles of the video matrix byte
-                fg = PALETTE[vmd >> 4];
-                bg = PALETTE[vmd & 0x0Fu];
-            } else if (ecm) {   // ECM text: char bits 7-6 pick the background register
-                fg = PALETTE[vcl];
-                bg = PALETTE[vic.reg[0x21 + (vmd >> 6)] & 0x0Fu];
-            } else if (mcm) {   // multicolor text, colour-RAM bit 3 clear: hires
-                fg = PALETTE[vcl & 0x07u];
-                bg = d021;
-            } else {            // standard text
-                fg = PALETTE[vcl];
-                bg = d021;
+            // g-access: bitmap modes fetch the bitmap at VC*8; text the char generator.
+            uint8_t bits;
+            if (bmm) {
+                uint16_t base = (uint16_t)((vic.reg[0x18] & 0x08u) << 10);
+                bits = mem_vic_fetch((uint16_t)((base + (vcbase + col) * 8u + rc) & 0x3FFFu));
+            } else {
+                uint16_t base = (uint16_t)((vic.reg[0x18] & 0x0Eu) << 10);
+                uint8_t glyph = ecm ? (uint8_t)(vmd & 0x3Fu) : vmd;  // ECM steals the top 2 bits
+                bits = mem_vic_fetch((uint16_t)(base + glyph * 8u + rc));
             }
-            for (unsigned px = 0; px < 8; px++) {
-                bool on = (bits & (0x80u >> px)) != 0;
-                px_col[px] = on ? fg : bg;
-                px_fg[px] = on ? 1 : 0;
+            // Bitmap MCM is always multicolor; text MCM is per-cell on colour-RAM bit 3.
+            bool multicolor = bmm ? mcm : (mcm && (vcl & 0x08u));
+            if (multicolor) {
+                uint32_t c[4];
+                c[0] = d021;
+                if (bmm) {  // multicolor bitmap
+                    c[1] = PALETTE[vmd >> 4];
+                    c[2] = PALETTE[vmd & 0x0Fu];
+                    c[3] = PALETTE[vcl & 0x0Fu];
+                } else {    // multicolor text
+                    c[1] = PALETTE[vic.reg[0x22] & 0x0Fu];
+                    c[2] = PALETTE[vic.reg[0x23] & 0x0Fu];
+                    c[3] = PALETTE[vcl & 0x07u];
+                }
+                for (unsigned px = 0; px < 8; px++) {
+                    unsigned pair = (bits >> (6u - (px & ~1u))) & 3u;  // [7:6][5:4][3:2][1:0]
+                    px_col[px] = c[pair];
+                    px_fg[px] = (pair & 2u) ? 1 : 0;                   // pairs 10/11 foreground
+                }
+            } else {
+                uint32_t fg, bg;
+                if (bmm) {          // standard bitmap: nibbles of the video matrix byte
+                    fg = PALETTE[vmd >> 4];
+                    bg = PALETTE[vmd & 0x0Fu];
+                } else if (ecm) {   // ECM text: char bits 7-6 pick the background register
+                    fg = PALETTE[vcl];
+                    bg = PALETTE[vic.reg[0x21 + (vmd >> 6)] & 0x0Fu];
+                } else if (mcm) {   // multicolor text, colour-RAM bit 3 clear: hires
+                    fg = PALETTE[vcl & 0x07u];
+                    bg = d021;
+                } else {            // standard text
+                    fg = PALETTE[vcl];
+                    bg = d021;
+                }
+                for (unsigned px = 0; px < 8; px++) {
+                    bool on = (bits & (0x80u >> px)) != 0;
+                    px_col[px] = on ? fg : bg;
+                    px_fg[px] = on ? 1 : 0;
+                }
             }
         }
     }
 
+    // Per-pixel border flip-flops (Bauer 3.9 rules 1, 4, 5, 6), evaluated in order
+    // as the raster crosses each column. Comparison values are read live.
+    unsigned left = border_left();
+    unsigned right = border_right();
+    unsigned btop = border_top_line();
+    unsigned bbot = border_bot_line();
+    bool den = (vic.reg[0x11] & 0x10u) != 0;
     for (unsigned px = 0; px < 8; px++) {
-        unsigned c = fbcol + px;
-        if (c < left || c > right) {  // outside the column window: border
-            framebuffer[off + px] = border;
-            line_fg[c] = 0;
-        } else {
-            framebuffer[off + px] = px_col[px];
-            line_fg[c] = px_fg[px];
+        unsigned x = fbcol + px;
+        if (x == right) {
+            border_main = true;  // rule 1
         }
+        if (x == left && line == bbot) {
+            border_vert = true;  // rule 4
+        }
+        if (x == left && line == btop && den) {
+            border_vert = false;  // rule 5
+        }
+        if (x == left && !border_vert) {
+            border_main = false;  // rule 6
+        }
+        bool bord = border_main || border_vert;
+        framebuffer[off + px] = bord ? border : px_col[px];
+        line_fg[x] = bord ? 0 : px_fg[px];
     }
 }
 
@@ -565,6 +606,9 @@ void vic_tick(void) {
     }
 
     if (render_on) {
+        if (bc == 63) {
+            border_vert_latch(line);  // Bauer 3.9 rules 2, 3 (cycle 63, off framebuffer)
+        }
         render_cell(line, bc);
         sprite_composite_cycle(line, bc);
     }
