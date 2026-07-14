@@ -46,27 +46,62 @@ build/test-%: test/%_test.c test/test.h $(CORE_SRC)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
 
-# Build and run every unit suite headless plus the Lorenz runner; report per
-# subsystem and a total, and exit non-zero if any unit assertion failed.
-test: $(UNIT_BINS) $(TEST_BIN)
+# Three test targets, split by speed. `make test` is the fast inner loop (seconds):
+# every unit suite plus the fast group of the drive and iec suites. `make test-slow`
+# runs their slow group (DOS/serial integration, ~80s). `make test-cpu` runs the
+# Wolfgang Lorenz CPU-conformance suite (~14min). The union of test + test-slow is
+# the full unit suite (802 checks); test-cpu is separate (the Lorenz count is
+# reported inline, not folded into the 802 total).
+SLOW_BINS = build/test-drive build/test-iec
+
+test: $(UNIT_BINS)
 	@rc=0; crashed=0; crashlist=""; : > build/test.log; \
 	for t in $(UNIT_BINS); do \
-	  if ./$$t >> build/test.log 2>&1; then :; else \
+	  arg=""; case $${t##*/} in test-drive|test-iec) arg=fast;; esac; \
+	  if ./$$t $$arg >> build/test.log 2>&1; then :; else \
 	    ec=$$?; rc=1; crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
 	    echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
 	      >> build/test.log; \
 	  fi; \
 	done; \
 	echo "======== unit tests ========"; cat build/test.log; \
-	echo "======== lorenz ========"; \
-	./$(TEST_BIN) 2>/dev/null | grep -E "Tests passed|Stopped in test" || \
-	  echo "  (lorenz suite not present under test/lorenz; skipped)"; \
 	echo "======== summary ========"; \
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
-	     END{printf "TOTAL: %d passed, %d failed, %d skipped (completed suites only)\n",p,f,s}' build/test.log; \
+	     END{printf "TOTAL: %d passed, %d failed, %d skipped (fast suites; run make test-slow and make test-cpu for the rest)\n",p,f,s}' build/test.log; \
 	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
 	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
-	echo "RESULT: all unit suites passed"
+	echo "RESULT: all fast unit suites passed"
+
+# Wolfgang Lorenz 6502/6510 CPU-conformance suite. Slow (~14min); kept out of the
+# fast `make test` loop. Informational like the original: the runner reports its
+# pass count and stop reason on stdout and exits 0 unless the suite files are
+# absent (exit 1), which is surfaced but not treated as a regression here.
+test-cpu: $(TEST_BIN)
+	@echo "======== lorenz (CPU conformance) ========"; \
+	if ./$(TEST_BIN) 2>/dev/null | grep -E "Tests passed|Stopped in test|Boundary reached|Run complete"; then \
+	  echo "RESULT: lorenz run reported above"; \
+	else \
+	  echo "  (lorenz suite not present under test/lorenz; skipped)"; \
+	fi
+
+# Slow integration group: DOS format, LOAD/SAVE/NEW, near-full BAM, writeback,
+# and full IEC serial transactions. Same crash-visible aggregation as `make test`.
+test-slow: $(SLOW_BINS)
+	@rc=0; crashed=0; crashlist=""; : > build/test-slow.log; \
+	for t in $(SLOW_BINS); do \
+	  if ./$$t slow >> build/test-slow.log 2>&1; then :; else \
+	    ec=$$?; rc=1; crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
+	    echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
+	      >> build/test-slow.log; \
+	  fi; \
+	done; \
+	echo "======== slow integration tests ========"; cat build/test-slow.log; \
+	echo "======== summary ========"; \
+	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
+	     END{printf "TOTAL: %d passed, %d failed, %d skipped (slow suites only)\n",p,f,s}' build/test-slow.log; \
+	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
+	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	echo "RESULT: all slow suites passed"
 
 # Sanitizer build: run the unit suites under AddressSanitizer and
 # UndefinedBehaviorSanitizer. The vic suite boots the real KERNAL for 200 frames,
@@ -163,4 +198,4 @@ fuzz:
 clean:
 	rm -rf build
 
-.PHONY: all clean test test-asan coverage valgrind fuzz
+.PHONY: all clean test test-slow test-cpu test-asan coverage valgrind fuzz

@@ -704,10 +704,8 @@ static void test_bam_near_full(void) {
     CHECK_EQ(match, 1, "the file saved into non-adjacent free space reloads identically");
 }
 
-int main(void) {
-    TEST_BEGIN("drive");
-    const char *synth = "build/synth1541_dt.rom";
-    build_synth_rom(synth);
+// Hardware-level unit checks: sub-second, no DOS command path.
+static void drive_fast(const char *synth) {
     test_boot_from_rom_reaches_idle(synth);
     test_drive_ram_works();
     test_bus_isolation(synth);
@@ -719,6 +717,11 @@ int main(void) {
     test_sync_and_byte_ready();
     test_byte_ready_rate_per_zone();
     test_disk_optional();
+}
+
+// DOS-integration checks (LOAD/SAVE/NEW/BAM/writeback through the GCR surface):
+// seconds each, tens of seconds total. Run by `make test-slow`.
+static void drive_slow(void) {
     test_load_directory();
     test_load_program();
     test_new_directory();
@@ -726,5 +729,23 @@ int main(void) {
     test_bam_after_save();
     test_bam_near_full();
     test_writeback();
+}
+
+// argv[1] selects the group: "fast", "slow", or (default) "all". The split lets
+// `make test` stay fast; `make test-slow` runs the integration group. The union
+// is the same set of checks as running with no argument.
+int main(int argc, char **argv) {
+    const char *mode = (argc > 1) ? argv[1] : "all";
+    TEST_BEGIN("drive");
+    const char *synth = "build/synth1541_dt.rom";
+    build_synth_rom(synth);
+    if (strcmp(mode, "slow") == 0) {
+        drive_slow();
+    } else if (strcmp(mode, "fast") == 0) {
+        drive_fast(synth);
+    } else {
+        drive_fast(synth);
+        drive_slow();
+    }
     return TEST_SUMMARY("drive");
 }

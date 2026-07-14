@@ -207,14 +207,32 @@ static void test_clock_skew(void) {
     CHECK(mem_read(0xC1FF) >= 27, "handshake completes despite a deliberate clock skew");
 }
 
-int main(void) {
-    TEST_BEGIN("iec");
-    const char *synth = "build/synth_iec.rom";
-    build_min_rom(synth);
+// Fast bus-level checks (no full serial transaction).
+static void iec_fast(const char *synth) {
     test_wired_and(synth);
     test_atn_wakes_drive();
+}
+
+// Full IEC serial transactions at real bit timing: seconds each. `make test-slow`.
+static void iec_slow(void) {
     test_status_round_trip();
     test_address_recognition();
     test_clock_skew();
+}
+
+// argv[1] selects "fast", "slow", or (default) "all"; union equals the full set.
+int main(int argc, char **argv) {
+    const char *mode = (argc > 1) ? argv[1] : "all";
+    TEST_BEGIN("iec");
+    const char *synth = "build/synth_iec.rom";
+    build_min_rom(synth);
+    if (strcmp(mode, "slow") == 0) {
+        iec_slow();
+    } else if (strcmp(mode, "fast") == 0) {
+        iec_fast(synth);
+    } else {
+        iec_fast(synth);
+        iec_slow();
+    }
     return TEST_SUMMARY("iec");
 }
