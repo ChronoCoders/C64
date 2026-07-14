@@ -263,12 +263,26 @@ static void render_cell(uint16_t line, unsigned bc) {
 
     uint32_t px_col[8];
     uint8_t px_fg[8];
-    bool gfx = den_frame && bc >= GACCESS_FIRST && bc <= GACCESS_LAST;
-    if (!gfx) {
+    bool active = den_frame && bc >= GACCESS_FIRST && bc <= GACCESS_LAST;
+    if (!active) {
         uint32_t bg = PALETTE[vic.reg[0x21] & 0x0Fu];
         for (unsigned px = 0; px < 8; px++) {
             px_col[px] = bg;
             px_fg[px] = 0;
+        }
+    } else if (!display_state) {
+        // Idle state (Bauer 3.7.1): no c-access, so the video matrix is not read;
+        // the g-access is a fixed address ($3FFF, or $39FF when ECM). Set bits show
+        // black, clear bits the background colour. The idle byte is usually 0, so
+        // idle reads as solid background. render_cell must consult display_state
+        // here or it would draw the last badline's stale buffer_char/buffer_col.
+        bool ecm = (vic.reg[0x11] & 0x40u) != 0;
+        uint8_t bits = mem_vic_fetch(ecm ? 0x39FFu : 0x3FFFu);
+        uint32_t bg = PALETTE[vic.reg[0x21] & 0x0Fu];
+        for (unsigned px = 0; px < 8; px++) {
+            bool on = (bits & (0x80u >> px)) != 0;
+            px_col[px] = on ? PALETTE[0] : bg;
+            px_fg[px] = on ? 1 : 0;
         }
     } else {
         unsigned col = bc - GACCESS_FIRST;  // 0..39

@@ -653,7 +653,6 @@ static void test_border_open_side(void) {
 // RSEL. Fails against step 4 (line 251 > the geometric last line, always border).
 static void test_border_open_vertical(void) {
     p7_setup();
-    uint32_t white = p7_palette(1);
     uint32_t red = p7_palette(2);
     p7_fill(0x01u, 0xFFu, 0x01u);   // solid white screen
     vic_write(0x21, 0x06);          // background blue
@@ -665,9 +664,61 @@ static void test_border_open_vertical(void) {
     p7_tick_to(252, 0);             // finish line 251 with the vertical border open
     const uint32_t *fb = vic_framebuffer();
     size_t row = P7_ROW(251);
+    // Pure border test: line 251 is border under any static RSEL, but with the
+    // vertical flip-flop held open it is not. Content of the opened (idle) row is
+    // covered by the idle-state tests, so this asserts only "not border".
     CHECK(fb[row + 5] == red, "line 251: side border still closed at the far left");
     CHECK(fb[row + 200] != red, "open bottom border: line 251 col 200 is not border");
-    CHECK_EQ(fb[row + 200], white, "open bottom border: display continues into line 251");
+}
+
+// ---- Phase 7 idle state (spec Part 1) --------------------------------------
+//
+// In idle state (display_state = 0) render_cell must not draw the last badline's
+// stale buffer_char/buffer_col; it does a fixed g-access ($3FFF, or $39FF ECM) and
+// outputs background. The load-bearing fixture reaches idle through YSCROLL /
+// badline suppression with the border OPEN, so the stale data is actually visible.
+// A DEN-off fixture cannot prove this: the vertical border stays closed (rule 3
+// needs DEN), so border paints over whatever the sequencer produced.
+static void test_idle_yscroll_shows_background(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    uint32_t blue = p7_palette(6);
+    p7_fill(0x01u, 0xFFu, 0x01u);   // solid white glyph when displayed
+    mem_write(0x3FFFu, 0x00u);      // idle g-access reads 0 -> all background (after the fill)
+    vic_write(0x21, 0x06);          // background blue
+    vic_write(0x20, 0x02);          // border red
+    vic_write(0x11, 0x1Bu);         // DEN, RSEL, YSCROLL 3
+    vic_write(0x16, 0x08u);         // CSEL
+    p7_tick_to(100, 0);             // badlines up to here fill buffers white
+    while (vic.raster_line < 160) { // suppress every subsequent badline
+        if (vic.raster_cycle == 0) {
+            uint8_t ys = (uint8_t)(((vic.raster_line + 1u) & 7u));  // never equals line&7
+            vic_write(0x11, (uint8_t)((vic.reg[0x11] & ~0x07u) | ys));
+        }
+        vic_tick();
+    }
+    const uint32_t *fb = vic_framebuffer();
+    size_t idx = P7_ROW(150) + 200u;  // line 150 is idle, border open
+    CHECK(fb[idx] != white, "idle (YSCROLL suppression): not stale character data");
+    CHECK_EQ(fb[idx], blue, "idle (YSCROLL suppression): shows background");
+}
+
+// DEN cleared before line $30: the vertical border never opens, so the whole
+// window is border. Correct after step 5; this guards that (it passes against the
+// pre-idle-fix code too, since border already covered the stale data). It fails
+// only against a broken border unit, not a broken idle path.
+static void test_idle_den_off_is_border(void) {
+    p7_setup();
+    uint32_t red = p7_palette(2);
+    p7_fill(0x01u, 0xFFu, 0x01u);
+    vic_write(0x21, 0x06);
+    vic_write(0x20, 0x02);
+    vic_write(0x11, 0x0Bu);         // DEN OFF, RSEL, YSCROLL 3
+    vic_write(0x16, 0x08u);
+    p7_tick_to(0, 0);
+    p7_tick_to(300, 0);
+    const uint32_t *fb = vic_framebuffer();
+    CHECK(fb[P7_ROW(150) + 200u] == red, "DEN off: display window is border colour");
 }
 
 int main(void) {
@@ -697,5 +748,7 @@ int main(void) {
     test_rsel_csel_window();
     test_border_open_side();
     test_border_open_vertical();
+    test_idle_yscroll_shows_background();
+    test_idle_den_off_is_border();
     return TEST_SUMMARY("vic");
 }
