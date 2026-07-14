@@ -364,6 +364,206 @@ static void test_boot_render_hash(void) {
     CHECK_EQ(h, (long long)0xc604f932b47eb4e7ULL, "boot-render framebuffer hash");
 }
 
+// ---- Phase 7 graphics modes (step 1): the five valid modes -----------------
+//
+// Drive the VIC with a RAM-backed video matrix ($0400) and char/bitmap data
+// ($2000, RAM because it is outside the $1000-$1FFF char-ROM window), bank 0, no
+// ROMs. Colours are read palette-agnostically: set the border to an index,
+// render, and sample framebuffer[0] (always a border pixel, above the display).
+// Standard text is covered by the boot-render hash and works on the pre-Phase-7
+// code, so it is not re-tested here; each mode below fails against that code
+// (which renders every mode as standard text), as its comment states.
+#define P7_VM 0x0400u
+#define P7_GFX 0x2000u
+#define P7_D018 0x18u                            // vm $0400, char/bitmap base $2000
+#define P7_DISP (135u * VIC_FB_WIDTH + 192u)     // a display pixel: raster line 150, col 192
+
+static void p7_frame(void) {
+    while (!(vic.raster_line == 0 && vic.raster_cycle == 0)) vic_tick();  // to top of frame
+    uint16_t prev = 0;
+    for (;;) { vic_tick(); if (vic.raster_line == 0 && prev != 0) break; prev = vic.raster_line; }
+}
+static uint32_t p7_palette(uint8_t idx) {  // colour of palette index idx, via a border pixel
+    vic_write(0x20, idx);
+    p7_frame();
+    return vic_framebuffer()[0];
+}
+static void p7_fill(uint8_t vm, uint8_t gfx, uint8_t colram) {
+    for (unsigned i = 0; i < 1000u; i++) {
+        mem_write((uint16_t)(P7_VM + i), vm);
+        vic_color_write((uint16_t)(0xD800u + i), colram);
+    }
+    for (unsigned a = P7_GFX; a < P7_GFX + 0x2000u; a++) mem_write((uint16_t)a, gfx);
+}
+static void p7_setup(void) {
+    mem_init(); vic_init(); cia_init();  // cia: VIC bank 0 for mem_vic_fetch
+    vic_write(0x18, P7_D018);
+}
+static uint32_t p7_disp(void) { return vic_framebuffer()[P7_DISP]; }
+
+// Standard bitmap: bit set takes the video-matrix byte's high nibble. Fails on the
+// text-only code, which renders the $10 byte as a character at colour RAM 0 (black).
+static void test_mode_standard_bitmap(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1), black = p7_palette(0);
+    p7_fill(0x10u, 0xFFu, 0x00u);          // vm hi nibble 1 (white), lo 0 (black); all bits set
+    vic_write(0x11, 0x1Bu | 0x20u);        // DEN, RSEL, YSCROLL 3, BMM
+    vic_write(0x16, 0x08u);                // CSEL, MCM off
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_disp(), white, "standard bitmap: set bit -> video-matrix high nibble");
+    CHECK(white != black, "sanity: palette 1 != palette 0");
+}
+
+// Multicolor bitmap: bit pair 01 takes the video-matrix high nibble. Fails on the
+// text-only code, which renders pixel 0 as the $D021 background (blue).
+static void test_mode_multicolor_bitmap(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    p7_fill(0x10u, 0x55u, 0x02u);          // vm hi 1 (white); bitmap 01010101 -> all pairs 01
+    vic_write(0x21, 0x06u);                // $D021 blue (the text-code result at px0)
+    vic_write(0x11, 0x1Bu | 0x20u);        // DEN, RSEL, YSCROLL 3, BMM
+    vic_write(0x16, 0x08u | 0x10u);        // CSEL, MCM
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_disp(), white, "multicolor bitmap: pair 01 -> video-matrix high nibble");
+}
+
+// Multicolor text (colour-RAM bit 3 set): pair 01 takes $D022. Fails on the
+// text-only code, which renders pixel 0 as the $D021 background (blue).
+static void test_mode_multicolor_text(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    p7_fill(0x01u, 0x55u, 0x08u | 0x05u);  // char 1; glyph 01010101; colour RAM bit3 set + colour 5
+    vic_write(0x21, 0x06u);                // $D021 blue
+    vic_write(0x22, 0x01u);                // $D022 white (pair 01)
+    vic_write(0x11, 0x1Bu);                // DEN, RSEL, YSCROLL 3 (text)
+    vic_write(0x16, 0x08u | 0x10u);        // CSEL, MCM
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_disp(), white, "multicolor text: pair 01 -> $D022");
+}
+
+// ECM text: char bits 7-6 select the background register (10 -> $D023). Fails on
+// the text-only code, which uses the unmasked char code and the $D021 background.
+static void test_mode_ecm_text(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    p7_fill(0x80u, 0x00u, 0x00u);          // char $80 (bits 7-6 = 10); glyph all-clear -> all bg
+    vic_write(0x21, 0x06u);                // $D021 blue (text-code background)
+    vic_write(0x23, 0x01u);                // $D023 white (ECM background for bits 10)
+    vic_write(0x11, 0x1Bu | 0x40u);        // DEN, RSEL, YSCROLL 3, ECM
+    vic_write(0x16, 0x08u);                // CSEL, MCM off
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_disp(), white, "ECM text: char bits 7-6 = 10 -> $D023 background");
+}
+
+// ---- Phase 7 step 2: the three invalid mode combinations output black -------
+//
+// Each fills the screen with an all-on white glyph (baseline renders it white,
+// ignoring the mode bits) and asserts a display pixel is black. Each fails
+// against the text-only code, which produces white.
+static void p7_invalid(uint8_t d011, uint8_t d016, const char *name) {
+    p7_setup();
+    uint32_t black = p7_palette(0);
+    p7_fill(0x01u, 0xFFu, 0x01u);          // char 1, glyph all-on, colour RAM white
+    vic_write(0x11, d011);
+    vic_write(0x16, d016);
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_disp(), black, name);
+}
+static void test_mode_invalid_ecm_bmm(void) {
+    p7_invalid(0x1Bu | 0x40u | 0x20u, 0x08u, "invalid ECM+BMM: outputs black");
+}
+static void test_mode_invalid_ecm_mcm(void) {
+    p7_invalid(0x1Bu | 0x40u, 0x08u | 0x10u, "invalid ECM+MCM: outputs black");
+}
+static void test_mode_invalid_ecm_bmm_mcm(void) {
+    p7_invalid(0x1Bu | 0x40u | 0x20u, 0x08u | 0x10u, "invalid ECM+BMM+MCM: outputs black");
+}
+
+// ---- Phase 7 step 3: per-mode collision mask (line_fg) via $D01F ------------
+//
+// A wrong line_fg[] and a correct one produce identical pixels (spec Verification),
+// so these assert $D01F directly. A single sprite pixel is placed on the odd pixel
+// (px1) of display column 0: for a uniform-pair cell, px1's colour-vs-collision is
+// where the multicolor pair rule and the text-mode "bit set" rule disagree, so the
+// 01 and 10 cases here fail against the text-only code. (Pair 11 and the border
+// case cannot fail against it: multicolor foreground is a subset of "bit set", so
+// those agree; they guard against a wrong-mask regression.)
+static void p7_sprite_1px_col0px1(void) {
+    for (uint16_t a = 0x0C00u; a < 0x0C40u; a++) {
+        mem_write(a, ((a - 0x0C00u) % 3u == 0u) ? 0x80u : 0x00u);  // leftmost pixel each row
+    }
+    mem_write(0x07F8u, 0x30u);   // sprite 0 pointer ($0400 vm base + $3F8) -> block $0C00
+    vic_write(0x15, 0x01);       // enable sprite 0
+    vic_write(0x1C, 0x00);       // sprite 0 hires (not multicolor)
+    vic_write(0x1D, 0x00);       // no X-expand
+    vic_write(0x10, 0x00);       // X MSB 0
+    vic_write(0x00, 25);         // sprite 0 X = 25 -> fb column 33 = display col 0, px 1
+    vic_write(0x01, 100);        // sprite 0 Y = 100 -> displays lines 101..121
+    vic_write(0x27, 0x0E);       // sprite colour (any)
+}
+static uint8_t p7_sb_bit(void) {
+    p7_frame(); p7_frame();
+    return (uint8_t)(vic_read(0x1F) & 0x01u);  // sprite 0 vs background
+}
+
+// Multicolor text, uniform pairs. glyph 0x55=01,01,01,01 (bg); 0xAA=10 (fg);
+// 0xFF=11 (fg). Colour RAM bit 3 set selects multicolor.
+static void test_collision_mc_text_pair01(void) {
+    p7_setup();
+    p7_fill(0x01u, 0x55u, 0x08u | 0x05u);
+    vic_write(0x11, 0x1Bu); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 0, "mc text pair 01 is background: no sprite collision");
+}
+static void test_collision_mc_text_pair10(void) {
+    p7_setup();
+    p7_fill(0x01u, 0xAAu, 0x08u | 0x05u);
+    vic_write(0x11, 0x1Bu); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 1, "mc text pair 10 is foreground: sprite collides");
+}
+static void test_collision_mc_text_pair11(void) {
+    p7_setup();
+    p7_fill(0x01u, 0xFFu, 0x08u | 0x05u);
+    vic_write(0x11, 0x1Bu); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 1, "mc text pair 11 is foreground: sprite collides");
+}
+
+// Multicolor bitmap: bits come from bitmap memory, same pair->foreground rule.
+static void test_collision_mc_bitmap_pair01(void) {
+    p7_setup();
+    p7_fill(0x10u, 0x55u, 0x02u);
+    vic_write(0x11, 0x1Bu | 0x20u); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 0, "mc bitmap pair 01 is background: no sprite collision");
+}
+static void test_collision_mc_bitmap_pair10(void) {
+    p7_setup();
+    p7_fill(0x10u, 0xAAu, 0x02u);
+    vic_write(0x11, 0x1Bu | 0x20u); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 1, "mc bitmap pair 10 is foreground: sprite collides");
+}
+static void test_collision_mc_bitmap_pair11(void) {
+    p7_setup();
+    p7_fill(0x10u, 0xFFu, 0x02u);
+    vic_write(0x11, 0x1Bu | 0x20u); vic_write(0x16, 0x08u | 0x10u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 1, "mc bitmap pair 11 is foreground: sprite collides");
+}
+
+// A sprite over a border pixel does not collide: the border/idle path clears
+// line_fg. DEN off makes the whole window border.
+static void test_collision_border_no_collide(void) {
+    p7_setup();
+    p7_fill(0x01u, 0xFFu, 0x01u);
+    vic_write(0x11, 0x0Bu);      // DEN off (bit 4 clear): whole window is border
+    vic_write(0x16, 0x08u);
+    p7_sprite_1px_col0px1();
+    CHECK_EQ(p7_sb_bit(), 0, "sprite over border pixel does not collide");
+}
+
 int main(void) {
     TEST_BEGIN("vic");
     test_raster_advance_and_read();
@@ -374,5 +574,19 @@ int main(void) {
     test_sprite_display_starts_v_plus_1();
     test_sprite_x_ninth_bit();
     test_boot_render_hash();
+    test_mode_standard_bitmap();
+    test_mode_multicolor_bitmap();
+    test_mode_multicolor_text();
+    test_mode_ecm_text();
+    test_mode_invalid_ecm_bmm();
+    test_mode_invalid_ecm_mcm();
+    test_mode_invalid_ecm_bmm_mcm();
+    test_collision_mc_text_pair01();
+    test_collision_mc_text_pair10();
+    test_collision_mc_text_pair11();
+    test_collision_mc_bitmap_pair01();
+    test_collision_mc_bitmap_pair10();
+    test_collision_mc_bitmap_pair11();
+    test_collision_border_no_collide();
     return TEST_SUMMARY("vic");
 }

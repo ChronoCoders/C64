@@ -222,14 +222,72 @@ static void render_cell(uint16_t line, unsigned bc) {
         return;
     }
     unsigned col = bc - GACCESS_FIRST;  // 0..39
-    uint32_t fg = PALETTE[buffer_col[col]];
-    uint32_t bg = PALETTE[vic.reg[0x21] & 0x0F];
-    uint16_t cb = (uint16_t)((vic.reg[0x18] & 0x0E) << 10);
-    uint8_t bits = mem_vic_fetch((uint16_t)(cb + buffer_char[col] * 8u + rc));
-    for (unsigned px = 0; px < 8; px++) {
-        bool on = (bits & (0x80u >> px)) != 0;  // standard hires text: set bit = foreground
-        framebuffer[off + px] = on ? fg : bg;
-        line_fg[fbcol + px] = on ? 1 : 0;
+    bool ecm = (vic.reg[0x11] & 0x40u) != 0;   // $D011 bit 6
+    bool bmm = (vic.reg[0x11] & 0x20u) != 0;   // $D011 bit 5
+    bool mcm = (vic.reg[0x16] & 0x10u) != 0;   // $D016 bit 4
+    uint8_t vmd = buffer_char[col];            // video matrix byte (char code or bitmap colour)
+    uint8_t vcl = buffer_col[col];             // colour RAM nibble
+    uint32_t d021 = PALETTE[vic.reg[0x21] & 0x0Fu];
+
+    // Invalid combinations (ECM together with BMM or MCM) output black.
+    if (ecm && (bmm || mcm)) {
+        for (unsigned px = 0; px < 8; px++) {
+            framebuffer[off + px] = PALETTE[0];
+            line_fg[fbcol + px] = 0;
+        }
+        return;
+    }
+
+    // g-access: bitmap modes fetch the bitmap at VC*8; text modes the char generator.
+    uint8_t bits;
+    if (bmm) {
+        uint16_t base = (uint16_t)((vic.reg[0x18] & 0x08u) << 10);
+        bits = mem_vic_fetch((uint16_t)((base + (vcbase + col) * 8u + rc) & 0x3FFFu));
+    } else {
+        uint16_t base = (uint16_t)((vic.reg[0x18] & 0x0Eu) << 10);
+        uint8_t glyph = ecm ? (uint8_t)(vmd & 0x3Fu) : vmd;  // ECM steals the top 2 bits
+        bits = mem_vic_fetch((uint16_t)(base + glyph * 8u + rc));
+    }
+
+    // Bitmap MCM is always multicolor; text MCM is per-cell on colour-RAM bit 3.
+    bool multicolor = bmm ? mcm : (mcm && (vcl & 0x08u));
+    if (multicolor) {
+        uint32_t c[4];
+        c[0] = d021;
+        if (bmm) {  // multicolor bitmap
+            c[1] = PALETTE[vmd >> 4];
+            c[2] = PALETTE[vmd & 0x0Fu];
+            c[3] = PALETTE[vcl & 0x0Fu];
+        } else {    // multicolor text
+            c[1] = PALETTE[vic.reg[0x22] & 0x0Fu];
+            c[2] = PALETTE[vic.reg[0x23] & 0x0Fu];
+            c[3] = PALETTE[vcl & 0x07u];
+        }
+        for (unsigned px = 0; px < 8; px++) {
+            unsigned pair = (bits >> (6u - (px & ~1u))) & 3u;  // [7:6][5:4][3:2][1:0], 2 px each
+            framebuffer[off + px] = c[pair];
+            line_fg[fbcol + px] = (pair & 2u) ? 1 : 0;         // pairs 10/11 are foreground
+        }
+    } else {
+        uint32_t fg, bg;
+        if (bmm) {          // standard bitmap: nibbles of the video matrix byte
+            fg = PALETTE[vmd >> 4];
+            bg = PALETTE[vmd & 0x0Fu];
+        } else if (ecm) {   // ECM text: char bits 7-6 pick the background register
+            fg = PALETTE[vcl];
+            bg = PALETTE[vic.reg[0x21 + (vmd >> 6)] & 0x0Fu];
+        } else if (mcm) {   // multicolor text, colour-RAM bit 3 clear: hires, colour & 7
+            fg = PALETTE[vcl & 0x07u];
+            bg = d021;
+        } else {            // standard text
+            fg = PALETTE[vcl];
+            bg = d021;
+        }
+        for (unsigned px = 0; px < 8; px++) {
+            bool on = (bits & (0x80u >> px)) != 0;
+            framebuffer[off + px] = on ? fg : bg;
+            line_fg[fbcol + px] = on ? 1 : 0;
+        }
     }
 }
 
