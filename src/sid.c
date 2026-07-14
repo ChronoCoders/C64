@@ -229,6 +229,7 @@ static int32_t fir_hist[FIR_LEN];  // phi2-rate history feeding the decimating F
 static unsigned fir_pos;           // ring write index (also the oldest sample)
 static uint32_t rs_phase;    // Bresenham resample phase
 static int64_t dc_lp;        // DC-blocker lowpass estimate
+static bool audio_primed;    // false until FIR/DC state is primed to the first sample
 
 // ---- Waveform generators (12-bit) -----------------------------------------
 
@@ -492,7 +493,16 @@ void sid_clock(void) {
     // Pass 4: push the mix into the FIR history, and at each Bresenham output
     // instant convolve to a low-passed sample, DC-block it, and push 16-bit.
     if (audio_on) {
-        fir_hist[fir_pos] = sid_output();
+        int32_t s = sid_output();
+        if (!audio_primed) {
+            // Prime the FIR delay line and DC estimate to the first sample: the
+            // 357-tap line otherwise fills from zero, ramping avg 0 -> DC and
+            // driving an ~84 ms startup thump through the DC blocker.
+            for (unsigned i = 0; i < FIR_LEN; i++) { fir_hist[i] = s; }
+            dc_lp = (int64_t)s << AUDIO_DC_SHIFT;
+            audio_primed = true;
+        }
+        fir_hist[fir_pos] = s;
         fir_pos++;
         if (fir_pos >= FIR_LEN) { fir_pos = 0; }  // now points at the oldest sample
         rs_phase += AUDIO_RATE_HZ;
@@ -594,7 +604,7 @@ int32_t sid_output(void) {
     return (direct_out + filter_out + MIXER_DC) * (int32_t)vol;
 }
 
-void sid_set_audio(bool on) { audio_on = on; }
+void sid_set_audio(bool on) { audio_on = on; if (on) { audio_primed = false; } }
 bool sid_audio_enabled(void) { return audio_on; }
 
 unsigned sid_audio_read(int16_t *dst, unsigned max) {
@@ -641,6 +651,7 @@ void sid_reset(void) {
     fir_pos = 0;
     rs_phase = 0;
     dc_lp = 0;
+    audio_primed = false;
 }
 
 void sid_init(void) { sid_reset(); }

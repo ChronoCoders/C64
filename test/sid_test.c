@@ -379,9 +379,38 @@ static void test_filter_audio_bit_identical(void) {
              "filter output stream matches the measured bit-identical hash");
 }
 
+// Enabling audio primes the FIR delay line and DC estimate to the first sample,
+// so a constant-DC input (full volume, silent voices) produces no startup thump:
+// the DC blocker output is ~0 from the first sample instead of ramping the 357-tap
+// line up from zero (an ~84 ms transient of thousands otherwise). This is the only
+// sid test that enables audio, so it also covers the pass-4 FIR/DC-block path.
+static void test_audio_startup_primed_no_thump(void) {
+    sid_reset();
+    sid_set_audio(true);
+    sid_write(R_MODE_VOL, 0x0Fu);  // full volume; voices silent (envelopes 0 after reset)
+
+    int16_t out[256];
+    unsigned got = 0;
+    for (int i = 0; i < 12000 && got < 256u; i++) {
+        sid_clock();
+        got += sid_audio_read(out + got, 256u - got);
+    }
+    CHECK(got >= 256u, "audio path produces output when enabled");
+
+    int32_t pk = 0;
+    for (unsigned i = 0; i < got; i++) {
+        int32_t v = out[i] < 0 ? -out[i] : out[i];
+        if (v > pk) { pk = v; }
+    }
+    // Constant DC in -> DC blocker out is 0 with priming; without it the first
+    // samples carry a thump of thousands. Bound well below that.
+    CHECK(pk < 64, "primed startup carries no DC thump");
+}
+
 int main(void) {
     TEST_BEGIN("sid");
     test_filter_audio_bit_identical();
+    test_audio_startup_primed_no_thump();
     test_noise_first_output_is_fe();
     test_waveform_math_matches_datasheet();
     test_ring_source_is_previous_voice();
