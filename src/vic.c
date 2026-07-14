@@ -284,6 +284,10 @@ static void render_cell(uint16_t line, unsigned bc) {
         // black, clear bits the background colour. The idle byte is usually 0, so
         // idle reads as solid background. render_cell must consult display_state
         // here or it would draw the last badline's stale buffer_char/buffer_col.
+        // invariant: idle uses the hires colouring rule (set bit black, clear bit
+        // background) in every mode; true multicolor idle would colour bit pairs.
+        // The idle address content (usually 0 -> all background) makes this
+        // near-invisible, but it is not exact.
         bool ecm = (vic.reg[0x11] & 0x40u) != 0;
         uint8_t bits = mem_vic_fetch(ecm ? 0x39FFu : 0x3FFFu);
         uint32_t bg = PALETTE[vic.reg[0x21] & 0x0Fu];
@@ -365,6 +369,10 @@ static void render_cell(uint16_t line, unsigned bc) {
     // pixels from the previous cell. This shifts content right within the window;
     // the border comparison values below are unaffected, so at XSCROLL=7 in
     // 38-column mode content scrolls in from behind the (unmoved) border.
+    // invariant: the scroll-in at the first display cell carries the previous
+    // cell's pixels (background there); real hardware supplies the graphics
+    // shift-register contents. 38-column mode covers it in the common case, so this
+    // is an approximation only visible with an open left border.
     unsigned xscroll = vic.reg[0x16] & 0x07u;
     uint32_t out_col[8];
     uint8_t out_fg[8];
@@ -489,6 +497,9 @@ static bool sprite_ba_low(unsigned bc) {
 // its per-cycle pixel result; horizontal reuse within a line (which the real
 // shift register forbids) is therefore possible in this model. The X > $164
 // same-line display exception (Bauer 3.8.1) is not modelled.
+// invariant: sprites composite over the framebuffer regardless of the border
+// flip-flops, so they show in an opened border (real behaviour), but this
+// sprite-in-border path is not covered by a test.
 static void sprite_composite_cycle(uint16_t line, unsigned bc) {
     if (line < FB_FIRST_LINE || line >= FB_FIRST_LINE + VIC_FB_HEIGHT) {
         return;  // off-screen vertically

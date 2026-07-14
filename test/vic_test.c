@@ -758,6 +758,116 @@ static void test_xscroll_shifts_content(void) {
     CHECK_EQ(fb[row + 352], red, "XSCROLL 7: right border unmoved at col 352");
 }
 
+// ---- Phase 7 per-mode golden fixtures --------------------------------------
+//
+// Rich fixtures: every colour path of a mode present in one frame, each asserted
+// against the colour of the register/nibble it should come from (derived from the
+// values set here, NOT from render_cell's output, so a swapped register is caught),
+// plus a pinned whole-frame hash for regression. Each fails against the pre-Phase-7
+// text-only render_cell. The screen is filled by cell index mod n so every text row
+// shows the same 40-cell pattern; reads are on line 150 at fb col 32 + cell*8 + px.
+static void p7_pattern(const uint8_t *vm, const uint8_t *cr, unsigned n) {
+    for (unsigned i = 0; i < 1000u; i++) {
+        mem_write((uint16_t)(0x0400u + i), vm[i % n]);
+        vic_color_write((uint16_t)(0xD800u + i), cr[i % n]);
+    }
+}
+static void p7_glyph(uint8_t ch, uint8_t byte) {  // all 8 rows of a char's glyph = byte
+    for (unsigned r = 0; r < 8u; r++) mem_write((uint16_t)(0x2000u + ch * 8u + r), byte);
+}
+static void p7_bitmap(uint8_t byte) {  // fill the whole bitmap region
+    for (unsigned a = 0x2000u; a < 0x4000u; a++) mem_write((uint16_t)a, byte);
+}
+static uint32_t p7_pix(unsigned cell, unsigned px) {
+    return vic_framebuffer()[P7_ROW(150) + 32u + cell * 8u + px];
+}
+
+// Multicolor text: both colour-RAM sub-modes (bit 3 clear = hires cell, set =
+// multicolor) and all four pairs. Glyph 0x1B = pairs 00 01 10 11 across px 0/2/4/6.
+static void test_golden_multicolor_text(void) {
+    p7_setup();
+    uint32_t blue = p7_palette(6), red = p7_palette(2), green = p7_palette(5);
+    uint32_t cyan = p7_palette(3), yellow = p7_palette(7);
+    vic_write(0x21, 0x06);  // $D021 blue (pair 00)
+    vic_write(0x22, 0x02);  // $D022 red  (pair 01)
+    vic_write(0x23, 0x05);  // $D023 green(pair 10)
+    p7_glyph(0x00, 0x1Bu);
+    const uint8_t vm[2] = {0x00, 0x00};
+    const uint8_t cr[2] = {0x03, 0x0F};  // cell0 hires colour 3 (cyan); cell1 multicolor, colour 7
+    p7_pattern(vm, cr, 2);
+    vic_write(0x11, 0x1Bu);           // DEN, RSEL, YSCROLL 3 (text)
+    vic_write(0x16, 0x08u | 0x10u);   // CSEL, MCM
+    p7_frame(); p7_frame();
+    // Multicolor cell 1, pairs from px 0/2/4/6.
+    CHECK_EQ(p7_pix(1, 0), blue, "mc text pair 00 -> $D021");
+    CHECK_EQ(p7_pix(1, 2), red, "mc text pair 01 -> $D022");
+    CHECK_EQ(p7_pix(1, 4), green, "mc text pair 10 -> $D023");
+    CHECK_EQ(p7_pix(1, 6), yellow, "mc text pair 11 -> colour RAM & 7");
+    // Hires cell 0 (bit 3 clear): glyph 0x1B bit set -> colour RAM & 7 (cyan), else $D021.
+    CHECK_EQ(p7_pix(0, 3), cyan, "mc text hires sub-mode: set bit -> colour RAM");
+    CHECK_EQ(p7_pix(0, 0), blue, "mc text hires sub-mode: clear bit -> $D021");
+    CHECK_EQ((long long)p7_fnv(), (long long)0x884C9605276E1F03ULL, "golden frame hash: mc_text");
+}
+
+// Standard bitmap: high nibble (bit set) and low nibble (bit clear) both present.
+static void test_golden_standard_bitmap(void) {
+    p7_setup();
+    uint32_t red = p7_palette(2), white = p7_palette(1);
+    const uint8_t vm[1] = {0x21};   // high nibble 2 (red, fg), low nibble 1 (white, bg)
+    const uint8_t cr[1] = {0x00};
+    p7_pattern(vm, cr, 1);
+    p7_bitmap(0xF0u);               // px 0-3 set (high nibble), px 4-7 clear (low nibble)
+    vic_write(0x11, 0x1Bu | 0x20u); // DEN, RSEL, YSCROLL 3, BMM
+    vic_write(0x16, 0x08u);         // CSEL, MCM off
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_pix(0, 0), red, "std bitmap set bit -> video-matrix high nibble");
+    CHECK_EQ(p7_pix(0, 4), white, "std bitmap clear bit -> video-matrix low nibble");
+    CHECK_EQ((long long)p7_fnv(), (long long)0xE317CCCD58265783ULL, "golden frame hash: std_bitmap");
+}
+
+// Multicolor bitmap: all four pairs. 00->$D021, 01->vm hi, 10->vm lo, 11->colram lo.
+static void test_golden_multicolor_bitmap(void) {
+    p7_setup();
+    uint32_t blue = p7_palette(6), cyan = p7_palette(3), green = p7_palette(5), red = p7_palette(2);
+    vic_write(0x21, 0x06);          // $D021 blue (pair 00)
+    const uint8_t vm[1] = {0x35};   // hi 3 (cyan, pair 01), lo 5 (green, pair 10)
+    const uint8_t cr[1] = {0x02};   // colour RAM low 2 (red, pair 11)
+    p7_pattern(vm, cr, 1);
+    p7_bitmap(0x1Bu);               // pairs 00 01 10 11 across px 0/2/4/6
+    vic_write(0x11, 0x1Bu | 0x20u); // DEN, RSEL, YSCROLL 3, BMM
+    vic_write(0x16, 0x08u | 0x10u); // CSEL, MCM
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_pix(0, 0), blue, "mc bitmap pair 00 -> $D021");
+    CHECK_EQ(p7_pix(0, 2), cyan, "mc bitmap pair 01 -> video-matrix high nibble");
+    CHECK_EQ(p7_pix(0, 4), green, "mc bitmap pair 10 -> video-matrix low nibble");
+    CHECK_EQ(p7_pix(0, 6), red, "mc bitmap pair 11 -> colour RAM low nibble");
+    CHECK_EQ((long long)p7_fnv(), (long long)0x34838CB232F1F983ULL, "golden frame hash: mc_bitmap");
+}
+
+// ECM text: all four backgrounds. Char bits 7-6 select $D021..$D024; glyph char&0x3F.
+static void test_golden_ecm_text(void) {
+    p7_setup();
+    uint32_t blue = p7_palette(6), red = p7_palette(2), green = p7_palette(5), purple = p7_palette(4);
+    uint32_t white = p7_palette(1);
+    vic_write(0x21, 0x06);  // bits 00
+    vic_write(0x22, 0x02);  // bits 01
+    vic_write(0x23, 0x05);  // bits 10
+    vic_write(0x24, 0x04);  // bits 11
+    p7_glyph(0x00, 0xF0u);  // glyph 0 (char&0x3F): px 0-3 fg, px 4-7 background
+    const uint8_t vm[4] = {0x00, 0x40, 0x80, 0xC0};  // char bits 7-6 = 00 01 10 11
+    const uint8_t cr[4] = {0x01, 0x01, 0x01, 0x01};  // fg white
+    p7_pattern(vm, cr, 4);
+    vic_write(0x11, 0x1Bu | 0x40u); // DEN, RSEL, YSCROLL 3, ECM
+    vic_write(0x16, 0x08u);         // CSEL, MCM off
+    p7_frame(); p7_frame();
+    CHECK_EQ(p7_pix(0, 4), blue, "ECM bg 00 -> $D021");
+    CHECK_EQ(p7_pix(1, 4), red, "ECM bg 01 -> $D022");
+    CHECK_EQ(p7_pix(2, 4), green, "ECM bg 10 -> $D023");
+    CHECK_EQ(p7_pix(3, 4), purple, "ECM bg 11 -> $D024");
+    CHECK_EQ(p7_pix(0, 0), white, "ECM text set bit -> colour RAM");
+    CHECK_EQ((long long)p7_fnv(), (long long)0x8A22C47CFA3DEF83ULL, "golden frame hash: ecm_text");
+}
+
 int main(void) {
     TEST_BEGIN("vic");
     test_raster_advance_and_read();
@@ -788,5 +898,9 @@ int main(void) {
     test_idle_yscroll_shows_background();
     test_idle_den_off_is_border();
     test_xscroll_shifts_content();
+    test_golden_multicolor_text();
+    test_golden_standard_bitmap();
+    test_golden_multicolor_bitmap();
+    test_golden_ecm_text();
     return TEST_SUMMARY("vic");
 }
