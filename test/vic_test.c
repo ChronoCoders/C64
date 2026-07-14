@@ -564,6 +564,49 @@ static void test_collision_border_no_collide(void) {
     CHECK_EQ(p7_sb_bit(), 0, "sprite over border pixel does not collide");
 }
 
+// ---- Phase 7 step 4: RSEL/CSEL display window ------------------------------
+//
+// Fixture requirement (spec Verification): content at all four window edges, so a
+// narrowed window is visible. The screen is filled solid, so the top and bottom
+// rows and the leftmost and rightmost columns all carry foreground. RSEL=0 insets
+// 4 lines top and bottom; CSEL=0 insets 7 px left and 9 right. The four
+// combinations must therefore hash to four distinct frames; if any two match, the
+// fixture is not reaching the edges. Fails against the pre-step-4 code, which
+// ignores both bits and produces one hash for all four.
+static uint64_t p7_fnv(void) {
+    const uint32_t *fb = vic_framebuffer();
+    uint64_t h = 1469598103934665603ULL;
+    size_t px = (size_t)VIC_FB_WIDTH * VIC_FB_HEIGHT;
+    for (size_t p = 0; p < px; p++) {
+        for (unsigned k = 0; k < 4u; k++) {
+            h ^= (uint8_t)((fb[p] >> (8u * k)) & 0xFFu);
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+static void test_rsel_csel_window(void) {
+    p7_setup();
+    p7_fill(0x01u, 0xFFu, 0x01u);   // solid white screen: content at every edge
+    vic_write(0x20, 0x02);          // border red, distinct from the white content
+    uint64_t h[4];
+    unsigned i = 0;
+    for (int rsel = 1; rsel >= 0; rsel--) {
+        for (int csel = 1; csel >= 0; csel--) {
+            uint8_t d011 = 0x1Bu;                 // DEN, YSCROLL 3, RSEL set
+            if (!rsel) { d011 &= (uint8_t)~0x08u; }
+            uint8_t d016 = csel ? 0x08u : 0x00u;  // CSEL
+            vic_write(0x11, d011);
+            vic_write(0x16, d016);
+            p7_frame(); p7_frame();
+            h[i++] = p7_fnv();
+        }
+    }
+    CHECK(h[0] != h[1] && h[0] != h[2] && h[0] != h[3] &&
+          h[1] != h[2] && h[1] != h[3] && h[2] != h[3],
+          "RSEL/CSEL: the four window combinations produce four distinct frames");
+}
+
 int main(void) {
     TEST_BEGIN("vic");
     test_raster_advance_and_read();
@@ -588,5 +631,6 @@ int main(void) {
     test_collision_mc_bitmap_pair10();
     test_collision_mc_bitmap_pair11();
     test_collision_border_no_collide();
+    test_rsel_csel_window();
     return TEST_SUMMARY("vic");
 }
