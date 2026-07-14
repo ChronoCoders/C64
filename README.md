@@ -1,6 +1,6 @@
 # C64
 
-A cycle-accurate Commodore 64 emulator core in C. Targets PAL timing.
+A cycle-accurate Commodore 64 emulator core. 
 
 ## Status
 
