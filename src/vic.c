@@ -101,6 +101,12 @@ static bool den_frame;       // DEN was set during raster line $30 this frame
 static bool border_main = true;
 static bool border_vert = true;
 
+// XSCROLL pixel delay ($D016 bits 0-2): the previous cell's sequencer pixels, so a
+// shift of up to 7 can reach back one cell. The border comparison values do not
+// move with it, which is what scrolls content in from behind the border.
+static uint32_t carry_col[8];
+static uint8_t carry_fg[8];
+
 // Rendering can be disabled for headless timing-only runs (the Lorenz runner):
 // badline detection and BA/RDY still run, only the pixel/fetch work is skipped.
 static bool render_on = true;
@@ -198,6 +204,8 @@ void vic_reset(void) {
     den_frame = false;
     border_main = true;  // both flip-flops closed (border) out of reset
     border_vert = true;
+    memset(carry_col, 0, sizeof(carry_col));
+    memset(carry_fg, 0, sizeof(carry_fg));
     stall_grace = STALL_GRACE_CYCLES;
     bus_ba = 1;
     irq_latch = 0;
@@ -353,6 +361,27 @@ static void render_cell(uint16_t line, unsigned bc) {
         }
     }
 
+    // XSCROLL ($D016 bits 0-2): delay the sequencer pixels by 0-7, taking the low
+    // pixels from the previous cell. This shifts content right within the window;
+    // the border comparison values below are unaffected, so at XSCROLL=7 in
+    // 38-column mode content scrolls in from behind the (unmoved) border.
+    unsigned xscroll = vic.reg[0x16] & 0x07u;
+    uint32_t out_col[8];
+    uint8_t out_fg[8];
+    for (unsigned px = 0; px < 8; px++) {
+        if (px >= xscroll) {
+            out_col[px] = px_col[px - xscroll];
+            out_fg[px] = px_fg[px - xscroll];
+        } else {
+            out_col[px] = carry_col[8u + px - xscroll];
+            out_fg[px] = carry_fg[8u + px - xscroll];
+        }
+    }
+    for (unsigned px = 0; px < 8; px++) {
+        carry_col[px] = px_col[px];
+        carry_fg[px] = px_fg[px];
+    }
+
     // Per-pixel border flip-flops (Bauer 3.9 rules 1, 4, 5, 6), evaluated in order
     // as the raster crosses each column. Comparison values are read live.
     unsigned left = border_left();
@@ -375,8 +404,8 @@ static void render_cell(uint16_t line, unsigned bc) {
             border_main = false;  // rule 6
         }
         bool bord = border_main || border_vert;
-        framebuffer[off + px] = bord ? border : px_col[px];
-        line_fg[x] = bord ? 0 : px_fg[px];
+        framebuffer[off + px] = bord ? border : out_col[px];
+        line_fg[x] = bord ? 0 : out_fg[px];
     }
 }
 

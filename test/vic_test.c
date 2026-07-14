@@ -721,6 +721,43 @@ static void test_idle_den_off_is_border(void) {
     CHECK(fb[P7_ROW(150) + 200u] == red, "DEN off: display window is border colour");
 }
 
+// ---- Phase 7 step 6: XSCROLL ------------------------------------------------
+//
+// $D016 bits 0-2 shift the pixel output right by 0-7 within the window. Glyph 0x80
+// puts one white pixel at each cell's left edge (fb col 32, 40, ...); XSCROLL moves
+// it right. Fails against the current code, which ignores XSCROLL (the pixel stays
+// at col 32). The border comparison values do NOT move: at XSCROLL=7 the right
+// border still begins at col 352, which is what scrolls content behind the border.
+static void test_xscroll_shifts_content(void) {
+    p7_setup();
+    uint32_t white = p7_palette(1);
+    uint32_t blue = p7_palette(6);
+    uint32_t red = p7_palette(2);
+    p7_fill(0x01u, 0x80u, 0x01u);   // glyph 0x80: white at px0, background elsewhere
+    vic_write(0x21, 0x06);          // background blue
+    vic_write(0x20, 0x02);          // border red
+    vic_write(0x11, 0x1Bu);         // DEN, RSEL, YSCROLL 3
+    size_t row = P7_ROW(150);
+
+    vic_write(0x16, 0x08u);         // CSEL=1, XSCROLL=0
+    p7_frame(); p7_frame();
+    const uint32_t *fb = vic_framebuffer();
+    uint32_t x0_32 = fb[row + 32], x0_35 = fb[row + 35];
+
+    vic_write(0x16, 0x0Bu);         // CSEL=1, XSCROLL=3
+    p7_frame(); p7_frame();
+    fb = vic_framebuffer();
+    CHECK_EQ(x0_32, white, "XSCROLL 0: foreground pixel at col 32");
+    CHECK_EQ(x0_35, blue, "XSCROLL 0: background at col 35");
+    CHECK_EQ(fb[row + 35], white, "XSCROLL 3: foreground pixel shifted right to col 35");
+    CHECK_EQ(fb[row + 32], blue, "XSCROLL 3: col 32 is background (content shifted off it)");
+
+    vic_write(0x16, 0x0Fu);         // CSEL=1, XSCROLL=7
+    p7_frame(); p7_frame();
+    fb = vic_framebuffer();
+    CHECK_EQ(fb[row + 352], red, "XSCROLL 7: right border unmoved at col 352");
+}
+
 int main(void) {
     TEST_BEGIN("vic");
     test_raster_advance_and_read();
@@ -750,5 +787,6 @@ int main(void) {
     test_border_open_vertical();
     test_idle_yscroll_shows_background();
     test_idle_den_off_is_border();
+    test_xscroll_shifts_content();
     return TEST_SUMMARY("vic");
 }
