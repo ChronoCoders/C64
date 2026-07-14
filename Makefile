@@ -10,6 +10,9 @@ OPT = -O0 -g
 endif
 
 CFLAGS = $(CSTD) $(WARN) $(OPT)
+# The Lorenz conformance runner always builds at -O2, regardless of MODE: it is a
+# long batch job, never stepped in a debugger, and -O2 roughly halves its runtime.
+LORENZ_CFLAGS = $(CSTD) $(WARN) -O2
 
 # SDL2 is linked into the emulator binary only; the Lorenz test runner stays
 # headless (no display dependency).
@@ -40,7 +43,7 @@ $(BIN): $(SRC)
 
 $(TEST_BIN): $(TEST_SRC) $(CORE_SRC)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
+	$(CC) $(LORENZ_CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
 
 build/test-%: test/%_test.c test/test.h $(CORE_SRC)
 	@mkdir -p build
