@@ -421,6 +421,14 @@ static void render_cell(uint16_t line, unsigned bc) {
 // cycles. MC is not tracked (rendering reads the data block directly); MCBASE
 // drives the 21-row height cutoff that ends DMA. bc is Bauer's 1-based cycle.
 static void sprite_dma_events(uint16_t line, unsigned bc) {
+    // Only cycles 15, 16, 55, 56 and 58 change sprite state (Bauer 3.8.1 rules
+    // 2,3,4,7,8). Rule 1 (exp_ff held set while YEXP is clear) runs below on those
+    // same cycles before exp_ff is read, and exp_ff is not read anywhere else, so
+    // skipping the other ~58 cycles is behaviour-identical. It saves an 8-sprite
+    // loop and a switch on every one of them (157k switch evaluations/frame).
+    if (bc != 15u && bc != 16u && bc != 55u && bc != 56u && bc != 58u) {
+        return;
+    }
     uint8_t yexp = vic.reg[0x17];
     uint8_t en = vic.reg[0x15];
     for (int n = 0; n < 8; n++) {
