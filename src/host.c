@@ -78,7 +78,8 @@ static const KeyMap KEY_POS[] = {
 };
 static bool symbolic_mode = true;  // symbolic is the friendly default; F11 toggles
 static bool warp_mode;             // F10 toggles unthrottled (turbo) emulation
-static char base_title[64];        // window title, for appending the [WARP] tag
+static bool joy_mode;              // F9 routes the cursor keys to joystick 2 instead
+static char base_title[64];        // window title, for appending the [WARP]/[JOY] tags
 
 #define LSHIFT_ROW 1u
 #define LSHIFT_COL 7u
@@ -126,11 +127,30 @@ void host_present(const uint32_t *framebuffer) {
     SDL_RenderPresent(renderer);
 }
 
+static void update_title(void) {
+    char t[96];
+    SDL_snprintf(t, sizeof(t), "%s%s%s", base_title, warp_mode ? " [WARP]" : "",
+                 joy_mode ? " [JOY]" : "");
+    SDL_SetWindowTitle(window, t);
+}
+
 // Apply a host key press/release to the C64 matrix. Modifiers, cursor keys,
 // RESTORE and the special keys are position-based in both modes; the character
 // keys use the symbolic map (by keycode) or the positional map (by scancode).
 // Cursor up/left are the C64 down/right keys with SHIFT auto-applied.
 static void apply_key(SDL_Scancode sc, SDL_Keycode kc, bool down) {
+    if (joy_mode) {
+        switch (sc) {  // claimed by poll_joystick; must not also reach the matrix
+            case SDL_SCANCODE_UP:
+            case SDL_SCANCODE_DOWN:
+            case SDL_SCANCODE_LEFT:
+            case SDL_SCANCODE_RIGHT:
+            case SDL_SCANCODE_RALT:
+            case SDL_SCANCODE_LCTRL:
+                return;
+            default: break;
+        }
+    }
     switch (sc) {
         case SDL_SCANCODE_PAGEUP: cia_restore_set(down); return;
         case SDL_SCANCODE_UP:
@@ -182,6 +202,13 @@ static void poll_joystick(void) {
     if (ks[SDL_SCANCODE_KP_4]) mask |= 0x04;
     if (ks[SDL_SCANCODE_KP_6]) mask |= 0x08;
     if (ks[SDL_SCANCODE_KP_0] || ks[SDL_SCANCODE_RCTRL]) mask |= 0x10;
+    if (joy_mode) {  // F9: cursor keys drive joystick 2 on keyboards without a numpad
+        if (ks[SDL_SCANCODE_UP]) mask |= 0x01;
+        if (ks[SDL_SCANCODE_DOWN]) mask |= 0x02;
+        if (ks[SDL_SCANCODE_LEFT]) mask |= 0x04;
+        if (ks[SDL_SCANCODE_RIGHT]) mask |= 0x08;
+        if (ks[SDL_SCANCODE_RALT] || ks[SDL_SCANCODE_LCTRL]) mask |= 0x10;
+    }
     if (pad) {
         if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_UP)) mask |= 0x01;
         if (SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) mask |= 0x02;
@@ -213,9 +240,13 @@ bool host_poll(void) {
         } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F10 &&
                    !e.key.repeat) {
             warp_mode = !warp_mode;  // host control (F10 = warp/turbo), not C64 input
-            char t[80];
-            SDL_snprintf(t, sizeof(t), "%s%s", base_title, warp_mode ? " [WARP]" : "");
-            SDL_SetWindowTitle(window, t);
+            update_title();
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F9 &&
+                   !e.key.repeat) {
+            joy_mode = !joy_mode;  // host control (F9 = cursor keys as joystick 2)
+            cia_key_reset();       // drop held keys so none stick across modes
+            cia_joy_set(1, 0);
+            update_title();
         } else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
             apply_key(e.key.keysym.scancode, e.key.keysym.sym, true);
         } else if (e.type == SDL_KEYUP) {
