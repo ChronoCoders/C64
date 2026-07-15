@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "disk.h"
+#include "iec.h"
 #include "via.h"
 
 // Clock domains: the drive runs at 1.0 MHz, the C64 at PAL phi2 985248 Hz. They
@@ -133,7 +134,11 @@ static void drive_write(void *ctx, uint16_t addr, uint8_t val) {
         return;
     }
     if (addr >= 0x1800 && addr < 0x1C00) {
-        via_write(&via1, (uint8_t)(addr & 0x0Fu), val);
+        uint8_t r = (uint8_t)(addr & 0x0Fu);
+        via_write(&via1, r, val);
+        if (r == 0x0u || r == 0x2u) {
+            iec_dirty = true;  // ORB/DDRB: the only VIA1 bytes drive_iec_out reads
+        }
         return;
     }
     if (addr >= 0x1C00 && addr < 0x2000) {

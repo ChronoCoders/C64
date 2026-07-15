@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "bus.h"
+#include "iec.h"
 
 // MOS 6526 CIA, timers + interrupts (Phase 5a). Cycle-exact delay-pipeline
 // timer model from Wolfgang Lorenz, "A Software Model of the CIA6526" (Version
@@ -566,7 +567,13 @@ static void cia_reg_write(CIA *c, unsigned r, uint8_t v) {
 uint8_t cia1_read(uint16_t addr) { return cia_reg_read(&cia[0], addr & 0x0Fu); }
 void cia1_write(uint16_t addr, uint8_t val) { cia_reg_write(&cia[0], addr & 0x0Fu, val); }
 uint8_t cia2_read(uint16_t addr) { return cia_reg_read(&cia[1], addr & 0x0Fu); }
-void cia2_write(uint16_t addr, uint8_t val) { cia_reg_write(&cia[1], addr & 0x0Fu, val); }
+void cia2_write(uint16_t addr, uint8_t val) {
+    unsigned r = addr & 0x0Fu;
+    cia_reg_write(&cia[1], r, val);
+    if (r == R_PRA || r == R_DDRA) {
+        iec_dirty = true;  // the only CIA2 bytes cia2_iec_out reads
+    }
+}
 
 // ---- Inspection -----------------------------------------------------------
 
