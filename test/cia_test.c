@@ -243,6 +243,28 @@ static void test_keyboard_joystick_sharing(void) {
     CHECK_EQ(pb & 0x10, 0, "joystick pull and key pull AND together");
 }
 
+// Joystick 2 sits on Port A, which the KERNAL drives as outputs (DDRA=$FF) to
+// scan the keyboard rows. A read must still see the switch: on a 6526 the read
+// returns the pin, and a switch shorting the pin to ground beats the CIA's output
+// driver. Masking the pins by ~DDRA would make joystick 2 permanently unpressed.
+// Source: C64 hardware; every joystick 2 game reads $DC00 with DDRA=$FF.
+static void test_joystick2_read_with_port_a_as_output(void) {
+    static const char *const NAME[5] = {"up", "down", "left", "right", "fire"};
+    cia_init();
+    cia1_write(DDRA, 0xFF);  // as the KERNAL leaves it: rows are outputs
+    cia1_write(PRA, 0xFF);   // no row driven low
+    cia1_write(DDRB, 0x00);
+    for (unsigned bit = 0; bit < 5u; bit++) {
+        cia_joy_set(1, (uint8_t)(1u << bit));
+        CHECK_EQ(cia1_read(PRA) & (1u << bit), 0, NAME[bit]);
+        cia_joy_set(1, 0);
+        CHECK_EQ(cia1_read(PRA) & (1u << bit), (int)(1u << bit), "released reads high");
+    }
+    cia_joy_set(1, 0x1F);  // all five at once
+    CHECK_EQ(cia1_read(PRA) & 0x1F, 0, "all joystick 2 switches pull together");
+    cia_joy_set(1, 0);
+}
+
 // RESTORE is wired to the NMI line, not the keyboard matrix.
 static void test_restore_is_nmi(void) {
     cia_init();
@@ -346,6 +368,7 @@ int main(void) {
     test_cia2_drives_nmi();
     test_keyboard_matrix();
     test_keyboard_joystick_sharing();
+    test_joystick2_read_with_port_a_as_output();
     test_restore_is_nmi();
     test_tod_chain_and_latch();
     test_serial_shift();

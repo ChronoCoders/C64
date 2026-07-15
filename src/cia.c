@@ -356,17 +356,16 @@ static void cia1_pins(uint8_t *out_pa, uint8_t *out_pb) {
     *out_pb = pb;
 }
 
-// The read of a CIA1 port: output bits read back the data register, input bits
-// read the pin (matrix/joystick) state.
+// The read of a CIA1 port returns the pin state for every bit, input or output:
+// an external puller (a joystick switch, a matrix crosspoint) wins over the CIA's
+// output driver. cia1_pins already folds the driven value in, so the pins are the
+// answer. This is what makes joystick 2 readable at all: the KERNAL leaves
+// DDRA=$FF to drive the keyboard rows, so masking the pins by ~DDRA would discard
+// every joystick 2 pull.
 static uint8_t cia1_read_port(unsigned r) {
     uint8_t pa, pb;
     cia1_pins(&pa, &pb);
-    if (r == R_PRA) {
-        return (uint8_t)((cia[0].reg[R_PRA] & cia[0].reg[R_DDRA]) |
-                         (pa & (uint8_t)~cia[0].reg[R_DDRA]));
-    }
-    return (uint8_t)((cia[0].reg[R_PRB] & cia[0].reg[R_DDRB]) |
-                     (pb & (uint8_t)~cia[0].reg[R_DDRB]));
+    return (r == R_PRA) ? pa : pb;
 }
 
 // ---- IEC serial bus (Phase 5c, CIA2 Port A, C64 side) ---------------------
