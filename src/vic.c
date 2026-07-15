@@ -169,6 +169,7 @@ static const uint64_t SPRITE_BA_MASK[8] = {
 static uint8_t coll_ss;   // $D01E
 static uint8_t coll_sb;   // $D01F
 static uint8_t line_fg[VIC_FB_WIDTH];  // 1 where the current line's pixel is foreground graphics
+static uint8_t line_border[VIC_FB_WIDTH];  // 1 where the border unit owns the pixel
 
 // A VIC interrupt is asserted when a latched source is also enabled. This is the
 // single point that drives the VIC's contribution to the wired-OR IRQ line.
@@ -414,6 +415,7 @@ static void render_cell(uint16_t line, unsigned bc) {
         bool bord = border_main || border_vert;
         framebuffer[off + px] = bord ? border : out_col[px];
         line_fg[x] = bord ? 0 : out_fg[px];
+        line_border[x] = bord ? 1u : 0u;
     }
 }
 
@@ -505,9 +507,11 @@ static bool sprite_ba_low(unsigned bc) {
 // its per-cycle pixel result; horizontal reuse within a line (which the real
 // shift register forbids) is therefore possible in this model. The X > $164
 // same-line display exception (Bauer 3.8.1) is not modelled.
-// invariant: sprites composite over the framebuffer regardless of the border
-// flip-flops, so they show in an opened border (real behaviour), but this
-// sprite-in-border path is not covered by a test.
+// The border unit is the last output stage: where the flip-flops are set it owns
+// the pixel and sprites do not show (line_border). Where they are cleared, an
+// opened border shows sprites, which is what the open-border trick relies on.
+// Collisions are unaffected: the sprite sequencers run underneath the border, so
+// coll_ss/coll_sb still latch on pixels the border covers.
 static void sprite_composite_cycle(uint16_t line, unsigned bc) {
     if (line < FB_FIRST_LINE || line >= FB_FIRST_LINE + VIC_FB_HEIGHT) {
         return;  // off-screen vertically
@@ -588,8 +592,8 @@ static void sprite_composite_cycle(uint16_t line, unsigned bc) {
             coll_sb |= b;
         }
         bool behind_fg = (vic.reg[0x1B] >> winner[px]) & 1u;
-        if (!behind_fg || !line_fg[c]) {
-            framebuffer[rowoff + c] = colr[px];
+        if ((!behind_fg || !line_fg[c]) && !line_border[c]) {
+            framebuffer[rowoff + c] = colr[px];  // border unit is last: it wins
         }
     }
     if (old_ss == 0 && coll_ss != 0) {
@@ -619,6 +623,7 @@ void vic_tick(void) {
     }
     if (bc == 1) {
         memset(line_fg, 0, sizeof(line_fg));  // new line's foreground mask
+        memset(line_border, 0, sizeof(line_border));
     }
 
     // Sprite DMA/display state machine (governs sprite BA and the height cutoff).

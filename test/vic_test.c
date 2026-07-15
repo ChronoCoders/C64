@@ -260,7 +260,10 @@ static void test_sprite_display_starts_v_plus_1(void) {
     cia_init();
     setup_sprite_ram();
 
-    vic_write(0x11, 0x00);  // DEN off: display area is border colour (black)
+    // DEN on: with DEN clear, Bauer 3.9 rule 3 never fires, the vertical border
+    // flip-flop stays set all frame and the border covers the whole screen, so no
+    // sprite would show at all. The display must be open to observe one.
+    vic_write(0x11, 0x1Bu);  // DEN, RSEL, YSCROLL 3; background stays black
     vic_write(0x15, 0x01);  // enable sprite 0
     const uint8_t V = 100;
     vic_write(0x01, V);     // sprite 0 Y
@@ -292,7 +295,7 @@ static void test_sprite_x_ninth_bit(void) {
     vic_init();
     cia_init();
     setup_sprite_ram();
-    vic_write(0x11, 0x00);
+    vic_write(0x11, 0x1Bu);  // DEN on: a closed border would hide the sprite entirely
     vic_write(0x15, 0x01);
     vic_write(0x01, V);
     vic_write(0x00, 0x30);  // low 8 X bits = 48
@@ -308,7 +311,7 @@ static void test_sprite_x_ninth_bit(void) {
     vic_init();
     cia_init();
     setup_sprite_ram();
-    vic_write(0x11, 0x00);
+    vic_write(0x11, 0x1Bu);  // DEN on: a closed border would hide the sprite entirely
     vic_write(0x15, 0x01);
     vic_write(0x01, V);
     vic_write(0x00, 0x30);
@@ -377,6 +380,7 @@ static void test_boot_render_hash(void) {
 #define P7_GFX 0x2000u
 #define P7_D018 0x18u                            // vm $0400, char/bitmap base $2000
 #define P7_DISP (135u * VIC_FB_WIDTH + 192u)     // a display pixel: raster line 150, col 192
+#define FB_FIRST_LINE_T 15u                      // raster shown at framebuffer row 0 (src/vic.c)
 
 static void p7_frame(void) {
     while (!(vic.raster_line == 0 && vic.raster_cycle == 0)) vic_tick();  // to top of frame
@@ -400,6 +404,37 @@ static void p7_setup(void) {
     vic_write(0x18, P7_D018);
 }
 static uint32_t p7_disp(void) { return vic_framebuffer()[P7_DISP]; }
+
+// The border unit is the last output stage: a sprite parked under a closed border
+// must not show. Games rely on this to hide spare sprites off-screen (Arkanoid
+// parks its idle Vaus paddles in the border). Collisions still latch underneath,
+// because the sprite sequencers run below the border unit. Source: Bauer 3.9 (the
+// border unit switches the output, the sequencers keep running).
+// Fails against the pre-fix code, which composited sprites over the border.
+static void test_sprite_hidden_by_closed_border(void) {
+    p7_setup();
+    uint32_t red = p7_palette(2), blue = p7_palette(6);
+    vic_write(0x20, 6);          // border blue
+    vic_write(0x11, 0x1Bu);      // DEN, RSEL, standard text: border closed top/bottom
+    vic_write(0x27, 2);          // sprite 0 colour red
+    vic_write(0x15, 0x01);       // enable sprite 0
+    vic_write(0x00, 100);        // sprite 0 X
+    vic_write(0x01, 10);         // sprite 0 Y = 10: inside the TOP BORDER
+    mem_write((uint16_t)(P7_VM + 0x3F8u), 0x40u);            // sprite 0 data at $1000
+    for (unsigned i = 0; i < 63u; i++) mem_write((uint16_t)(0x1000u + i), 0xFFu);
+    p7_frame(); p7_frame();
+    // Raster 11..31 is where sprite 0 would draw; it is deep in the top border.
+    const uint32_t *fb = vic_framebuffer();
+    unsigned hits = 0;
+    for (unsigned l = 11u; l < 31u; l++) {
+        if (l < FB_FIRST_LINE_T) continue;
+        for (unsigned x = 108u; x < 132u; x++) {
+            if (fb[(l - FB_FIRST_LINE_T) * VIC_FB_WIDTH + x] == red) hits++;
+        }
+    }
+    CHECK_EQ((int)hits, 0, "sprite under a closed border does not show");
+    CHECK_EQ(fb[0], blue, "border pixel is still border colour");
+}
 
 // Standard bitmap: bit set takes the video-matrix byte's high nibble. Fails on the
 // text-only code, which renders the $10 byte as a character at colour RAM 0 (black).
@@ -878,6 +913,7 @@ int main(void) {
     test_sprite_display_starts_v_plus_1();
     test_sprite_x_ninth_bit();
     test_boot_render_hash();
+    test_sprite_hidden_by_closed_border();
     test_mode_standard_bitmap();
     test_mode_multicolor_bitmap();
     test_mode_multicolor_text();
