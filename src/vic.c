@@ -716,12 +716,16 @@ static bool cpu_should_run(void) {
 
 void vic_step(void) {
     vic_tick();
+    // The CIAs are clocked at phi2 every cycle (their timers must run for the
+    // Lorenz CIA tests and for KERNAL timing); they feed the IRQ/NMI lines.
+    // Clocked BEFORE the CPU so both interrupt sources have driven the wired-OR
+    // line before cpu_tick() samples it: the VIC asserts in vic_tick() above, and
+    // with the CIA clocked after the CPU the same line was seen a cycle later
+    // depending on which chip pulled it, which no single wire can do.
+    cia_clock();
     if (cpu_should_run()) {
         cpu_tick();
     }
-    // The CIAs are clocked at phi2 every cycle (their timers must run for the
-    // Lorenz CIA tests and for KERNAL timing); they feed the IRQ/NMI lines.
-    cia_clock();
     // The SID is clocked at phi2 alongside the CPU/VIC when audio is enabled
     // (the runtime binary). This only advances SID-internal state; it never
     // touches VIC/CPU/bus state, so VIC/CPU cycle timing is unchanged. Headless
