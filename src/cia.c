@@ -381,7 +381,7 @@ static uint8_t cia2_read_pa(void) {
     CIA *c = &cia[1];
     uint8_t ddra = c->reg[R_DDRA];
     uint8_t v = (uint8_t)((c->reg[R_PRA] & ddra) | (uint8_t)~ddra);
-    uint8_t out = (uint8_t)(c->reg[R_PRA] & ddra);  // only driven output bits pull
+    uint8_t out = (uint8_t)((c->reg[R_PRA] & ddra) | (uint8_t)~ddra);  // input pin floats high; the 7406 inverter pulls its line low
     bool clk_low = (out & IEC_CLK_OUT) || (iec_dev_pull & IEC_PULL_CLK);
     bool data_low = (out & IEC_DATA_OUT) || (iec_dev_pull & IEC_PULL_DATA);
     if (clk_low) {
@@ -398,10 +398,12 @@ static uint8_t cia2_read_pa(void) {
 }
 
 // The IEC lines the C64 is currently pulling low (IEC_PULL_* convention), for the
-// shared drive bus (Phase 6c): a driven CIA2 Port A out bit pulls its line low.
+// shared drive bus (Phase 6c): a CIA2 Port A pin pulls its line low when the pin
+// state is high, i.e. driven high OR floating (input) into the 7406 inverter.
 // This is the read side of the connection; cia_iec_device_pull is the write side.
 uint8_t cia2_iec_out(void) {
-    uint8_t out = (uint8_t)(cia[1].reg[R_PRA] & cia[1].reg[R_DDRA]);
+    uint8_t ddra = cia[1].reg[R_DDRA];
+    uint8_t out = (uint8_t)((cia[1].reg[R_PRA] & ddra) | (uint8_t)~ddra);  // input pin floats high; the 7406 inverter pulls its line low
     uint8_t m = 0;
     if (out & IEC_ATN_OUT) { m |= IEC_PULL_ATN; }
     if (out & IEC_CLK_OUT) { m |= IEC_PULL_CLK; }
