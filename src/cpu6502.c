@@ -1425,11 +1425,21 @@ static void op_sbx(void) { read_imm(sbx_op); }
 
 // ---- Illegal unstable: ANE LXA SHA SHX SHY TAS ----------------------------
 //
-// These are analog-unstable on real hardware; we implement the deterministic
-// model VICE uses (which the Lorenz suite is validated against). The magic
-// constants come from VICE src/6510core.c: ANE uses $EF (0xEE/0xFF also satisfy
-// Lorenz's aneb), and LXA requires $EE (needed by real software, matches lxab).
-#define ANE_MAGIC 0xEF
+// Analog-unstable on real hardware: what they produce depends on the chip and
+// its conditions. This core uses the deterministic model, with the opcodes'
+// documented formulas: ANE is A = (A | magic) & X & imm, LXA is
+// A = X = (A | magic) & imm. The magic byte is a fact about that unstable
+// silicon, not an expressive choice.
+//
+// What this repo's Lorenz suite actually pins, measured by sweeping values
+// through the full suite (no claim about any other source):
+//   LXA: constrained, NOT determined. LXAB (test 212) stops the run at 211/236
+//        for 0x00, while 0xEE, 0xEF and 0xFF each reach 236.
+//   ANE: not constrained at all. Every value tried, 0x00 included, reaches 236,
+//        so ANEB does not exercise the magic byte.
+// 0xEE is used for both: it lies inside the set LXAB accepts, and sharing one
+// value keeps the choice explicit rather than arbitrary.
+#define ANE_MAGIC 0xEE
 #define LXA_MAGIC 0xEE
 
 static void ane_op(uint8_t m) {
@@ -1448,8 +1458,9 @@ static void op_lxa(void) { read_imm(lxa_op); }
 // SH-group store: value = reg AND (high byte of base address + 1). No flags.
 // On a page cross the destination high byte is corrupted to the stored value
 // (the carry into the high byte is suppressed and replaced by the value). This
-// is the VICE/Lorenz deterministic model. cpu.data carries the page-cross flag;
-// cpu.addr carries the un-fixed-up (base_hi:eff_lo) address.
+// is the deterministic model; the Lorenz suite in this repo validates it.
+// cpu.data carries the page-cross flag; cpu.addr carries the un-fixed-up
+// (base_hi:eff_lo) address.
 
 static void sh_abs_indexed(uint8_t regval, uint8_t idx, bool is_tas) {
     // 5 cycles. abs,Y (SHA/SHX/TAS) or abs,X (SHY).
@@ -1675,7 +1686,7 @@ static const OpFn optable[256] = {
     [0x0B] = op_anc,      [0x2B] = op_anc,      [0x4B] = op_alr,
     [0x6B] = op_arr,      [0xCB] = op_sbx,
 
-    // Unstable illegals (VICE/Lorenz deterministic model).
+    // Unstable illegals (deterministic model; see the ANE/LXA note above).
     [0x8B] = op_ane,      [0xAB] = op_lxa,      [0xBB] = op_las,
     [0x93] = op_sha_indy, [0x9F] = op_sha_aby,  [0x9E] = op_shx_aby,
     [0x9C] = op_shy_abx,  [0x9B] = op_tas_aby,
