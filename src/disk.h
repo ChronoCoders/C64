@@ -4,7 +4,8 @@
 //! at mount time. The drive (drive.c) owns the head, the rotation timing, and the
 //! wiring to VIA2 and the CPU's SO pin; it reads bits out of the ring this builds.
 //!
-//! Read-only in Phase 6d. Sources: the documented 1541 disk format and the GCR
+//! Writes land on the in-memory ring; disk_writeback() is what reaches the file.
+//! Sources: the documented 1541 disk format and the GCR
 //! 4-to-5 table (Immers & Neufeld, "Inside Commodore DOS"; the 1541 schematic for
 //! the four density zones). Not another emulator's source.
 #ifndef DISK_H
@@ -25,8 +26,9 @@ unsigned disk_zone_of_track(unsigned track);       // 0 (fastest) .. 3 (slowest)
 unsigned disk_zone_byte_cycles(unsigned zone);     // drive (1 MHz) cycles per GCR byte
 unsigned disk_track_byte_cycles(unsigned track);   // same, by track
 
-// Mount a .d64 read-only. False (and no disk) if missing, wrong size, or otherwise
-// unusable. The image is loaded once, at the edge; there is no allocation.
+// Mount a .d64. False (and no disk) if missing, wrong size, or otherwise unusable.
+// The image is loaded once, at the edge; there is no allocation. Writes land on
+// the in-memory surface: disk_writeback() is what reaches the file.
 bool disk_mount(const char *path);
 // Mount from an in-memory image (tests and the fuzz harness). Same validation.
 bool disk_mount_image(const uint8_t *data, size_t len);

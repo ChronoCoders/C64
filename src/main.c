@@ -134,8 +134,9 @@ int main(int argc, char **argv) {
                DRIVE_ROM_PATH);
     }
 
-    // Optional read-only disk: --disk <path.d64>. A rejected or absent image just
-    // leaves the drive empty; the machine runs normally.
+    // Optional disk: --disk <path.d64>. Writes land on the in-memory surface and
+    // reach the file only through disk_writeback() on a clean exit. A rejected or
+    // absent image just leaves the drive empty; the machine runs normally.
     bool headless = false;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) {
@@ -143,7 +144,8 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
             const char *path = argv[++i];
             if (disk_mount(path)) {
-                printf("1541: mounted %s (read-only).\n", path);
+                printf("1541: mounted %s (read/write; a SAVE reaches the file "
+                       "only on a clean exit).\n", path);
             } else {
                 printf("1541: could not mount %s (missing or not a 35-track .d64).\n", path);
             }
