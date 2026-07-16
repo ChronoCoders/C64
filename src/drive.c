@@ -67,13 +67,15 @@ static uint8_t read_byte;        // last assembled GCR byte, presented on VIA2 P
 static bool byte_ready;          // BYTE READY asserted on this drive cycle
 static bool write_prev;          // head was in write mode on the previous step
 
-// A DATA or CLK line is low if the drive drives its OUT bit or the external bus
-// pulls it; ATN is driven only by the controller. The serial IN lines are
+// A DATA or CLK line is low if the drive's OUT pin state is high (driven high, or
+// input floating into the 7406) or the external bus pulls it; ATN is driven only
+// by the controller. The serial IN lines are
 // inverted (PB0/PB2/PB7 read 1 when their line is low), and the device jumpers
 // ground PB5/PB6 (device 8). Source: 1541 schematic serial-bus wiring.
 static void compose_via1_ports(void) {
-    bool data_low = ((via1.orb & via1.ddrb & V1_DATA_OUT) != 0) || (iec_ext & IEC_DATA);
-    bool clk_low = ((via1.orb & via1.ddrb & V1_CLK_OUT) != 0) || (iec_ext & IEC_CLK);
+    uint8_t out = (uint8_t)((via1.orb & via1.ddrb) | (uint8_t)~via1.ddrb);  // input pin floats high; the 7406 inverter pulls its line low
+    bool data_low = ((out & V1_DATA_OUT) != 0) || (iec_ext & IEC_DATA);
+    bool clk_low = ((out & V1_CLK_OUT) != 0) || (iec_ext & IEC_CLK);
     bool atn_low = (iec_ext & IEC_ATN) != 0;
     uint8_t pb = 0x00u;
     if (data_low) { pb |= 0x01u; }  // PB0 DATA in (inverted: 1 when line low)
@@ -348,7 +350,7 @@ void drive_set_halftrack(int halftrack) {
 // DATA low when ATN is asserted and the drive has not yet acknowledged via ATNA
 // (PB4). The drive never drives ATN. Source: 1541 schematic serial-bus wiring.
 uint8_t drive_iec_out(void) {
-    uint8_t out = (uint8_t)(via1.orb & via1.ddrb);
+    uint8_t out = (uint8_t)((via1.orb & via1.ddrb) | (uint8_t)~via1.ddrb);  // input pin floats high; the 7406 inverter pulls its line low
     uint8_t m = 0;
     if (out & V1_DATA_OUT) { m |= IEC_DATA; }
     if (out & V1_CLK_OUT) { m |= IEC_CLK; }
