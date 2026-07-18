@@ -1205,19 +1205,20 @@ static void poll_so_edge(void) {
     cpu.so_last = cpu.so_line;
 }
 
-// Interrupt recognition: NMI (edge, unmaskable) wins over IRQ (level, masked by
-// I). Sampled before each mid-instruction cycle; the last sample before a
-// boundary is the penultimate-cycle state, which gives the CLI/SEI/PLP
-// one-instruction I-flag delay and RTI's immediacy for free.
-static bool poll_interrupt(void) {
+// Interrupt condition for this cycle: NMI (edge, unmaskable) wins over IRQ (level,
+// masked by I). The caller samples this at the end of every cycle and acts on the
+// prior cycle's sample at a boundary (see cpu6502_tick), so recognition reflects the
+// penultimate cycle. *is_nmi reports which source, matched to the returned decision.
+static bool poll_interrupt(bool *is_nmi) {
     if (cpu.nmi_pending) {
-        cpu.intr_is_nmi = true;
+        *is_nmi = true;
         return true;
     }
     if (cpu.irq_line == 0 && !(cpu.p & FLAG_I)) {
-        cpu.intr_is_nmi = false;
+        *is_nmi = false;
         return true;
     }
+    *is_nmi = false;
     return false;
 }
 
@@ -1739,6 +1740,8 @@ void cpu6502_reset(CPU6502 *c) {
     cpu.jammed = false;  // reset is the only recovery from a jam
     cpu.in_interrupt = false;
     cpu.intr_latched = false;
+    cpu.intr_sample = false;
+    cpu.intr_sample_nmi = false;
 }
 
 void cpu6502_tick(CPU6502 *c) {
@@ -1750,33 +1753,34 @@ void cpu6502_tick(CPU6502 *c) {
     poll_so_edge();   // sample the SO line every cycle (1541 BYTE READY; inert for C64)
 
     if (cpu.cycle == 0) {
-        // Instruction boundary: act on the interrupt decision latched during the
-        // previous instruction's penultimate cycle, else fetch the next opcode.
+        // Instruction boundary: act on the interrupt decision from the previous
+        // instruction's penultimate cycle (intr_latched), else fetch the next opcode.
         if (cpu.intr_latched) {
-            cpu.intr_latched = false;
             begin_interrupt(cpu.intr_is_nmi);
-            return;
+        } else {
+            cpu.opcode = bus_read(cpu.pc++);
+            cpu.cycle = 1;
         }
-        cpu.opcode = bus_read(cpu.pc++);
-        cpu.cycle = 1;
-        return;
-    }
-
-    if (cpu.in_interrupt) {
+    } else if (cpu.in_interrupt) {
         int_handler();  // the interrupt sequence itself never polls
-        return;
+    } else {
+        OpFn fn = optable[cpu.opcode];
+        if (fn == NULL) {
+            op_unimpl();
+            return;  // halted: leave the recognition pipeline frozen
+        }
+        fn();
     }
 
-    // Poll before executing this cycle; the last poll before the boundary is the
-    // penultimate-cycle sample the hardware acts on.
-    cpu.intr_latched = poll_interrupt();
-
-    OpFn fn = optable[cpu.opcode];
-    if (fn == NULL) {
-        op_unimpl();
-        return;
-    }
-    fn();
+    // End of cycle: advance the interrupt-recognition pipeline. A sample taken this
+    // cycle is acted on one cycle later, so at a boundary intr_latched reflects the
+    // penultimate cycle, the 6502 recognition point. An interrupt asserted only during
+    // an instruction's last cycle therefore defers to after the next instruction. This
+    // one-cycle delay also preserves the CLI/SEI/PLP I-flag delay and RTI immediacy:
+    // the sample uses each cycle's post-execution flags, matched to the delay.
+    cpu.intr_latched = cpu.intr_sample;
+    cpu.intr_is_nmi = cpu.intr_sample_nmi;
+    cpu.intr_sample = poll_interrupt(&cpu.intr_sample_nmi);
 }
 
 bool cpu6502_halted(const CPU6502 *c) { return c->halted; }

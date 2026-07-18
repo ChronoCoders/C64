@@ -38,8 +38,10 @@ typedef struct {
     bool in_interrupt;
     uint16_t int_vector;
     bool int_b;         // B bit in pushed P: set for BRK, clear for IRQ/NMI
-    bool intr_latched;  // interrupt decision, latched at the penultimate cycle
+    bool intr_latched;  // interrupt decision acted on at the boundary (penultimate sample)
     bool intr_is_nmi;
+    bool intr_sample;      // this cycle's raw interrupt sample; one-cycle delay pipeline
+    bool intr_sample_nmi;  // whether intr_sample is an NMI
 
     // Per-instance bus.
     void *ctx;

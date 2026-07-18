@@ -545,6 +545,48 @@ static void test_interrupt_edge_cases(void) {
     CHECK_EQ(mem_read(0x01FD) & FLAG_U, FLAG_U, "hardware IRQ pushes bit 5 set");
 }
 
+// Interrupt recognition point (6502 penultimate-cycle rule): an interrupt asserted
+// only during an instruction's LAST cycle must defer to after the NEXT instruction,
+// so the pushed PC lands one instruction later than a naive last-cycle latch would
+// give. An assertion by the penultimate cycle is recognized after the current
+// instruction. Source: Lorenz IRQ/NMI (real-hardware) + 64doc interrupt timing.
+static uint16_t recog_pushed_pc(bool nmi, int assert_cycle) {
+    all_ram();
+    for (int i = 0; i < 40; i++) { mem_write((uint16_t)(0x0400 + i), 0xEA); }  // NOP sled
+    mem_write(0xFFFE, 0x00); mem_write(0xFFFF, 0x05);  // IRQ/BRK vector -> $0500
+    mem_write(0xFFFA, 0x00); mem_write(0xFFFB, 0x05);  // NMI vector -> $0500
+    cpu.pc = 0x0400; cpu.sp = 0xFF; cpu.p = 0x20;  // I clear
+    cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1; cpu.intr_latched = false;
+    cpu.nmi_pending = 0;
+    // Flush the recognition pipeline with the lines idle, then restart at $0400.
+    // Use cpu6502_tick directly: cpu_tick() reloads the lines from the bus each cycle.
+    for (int f = 0; f < 4; f++) { cpu6502_tick(&cpu); }
+    cpu.pc = 0x0400; cpu.sp = 0xFF; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.intr_latched = false;
+    // NOP_k occupies cycles 2k (fetch) and 2k+1 (execute). NOP_3 is at $0403.
+    int cyc = 0;
+    for (int s = 0; s < 60; s++) {
+        if (cyc == assert_cycle) {
+            if (nmi) { cpu.nmi_line = 0; } else { cpu.irq_line = 0; }
+        }
+        bool was_in = cpu.in_interrupt;
+        cpu6502_tick(&cpu);
+        cyc++;
+        if (!was_in && cpu.in_interrupt) { return cpu.pc; }  // PC that gets pushed
+    }
+    return 0xFFFF;
+}
+
+static void test_interrupt_recognition_point(void) {
+    // Assert during NOP_3's penultimate (fetch) cycle: recognized after NOP_3.
+    CHECK_EQ(recog_pushed_pc(false, 6), 0x0404, "IRQ at penultimate cycle: taken after that instruction");
+    CHECK_EQ(recog_pushed_pc(true, 6), 0x0404, "NMI at penultimate cycle: taken after that instruction");
+    // Assert during NOP_3's LAST cycle: must DEFER to after NOP_4 (pushed PC +1).
+    CHECK_EQ(recog_pushed_pc(false, 7), 0x0405, "IRQ at last cycle defers to the next instruction");
+    CHECK_EQ(recog_pushed_pc(true, 7), 0x0405, "NMI at last cycle defers to the next instruction");
+}
+
 // The SO (Set Overflow) input pin. A negative transition sets V; it is edge-
 // triggered, not level (holding SO low does not re-set V after a CLV). The 6510
 // leaves SO idle high, so this never fires for the C64; the 1541 wires BYTE READY
@@ -582,6 +624,7 @@ int main(void) {
     test_decimal_mode();
     test_rmw_dummy_write();
     test_interrupt_edge_cases();
+    test_interrupt_recognition_point();
     test_so_pin();
     return TEST_SUMMARY("cpu");
 }
