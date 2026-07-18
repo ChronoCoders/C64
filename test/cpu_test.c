@@ -587,6 +587,53 @@ static void test_interrupt_recognition_point(void) {
     CHECK_EQ(recog_pushed_pc(true, 7), 0x0405, "NMI at last cycle defers to the next instruction");
 }
 
+// Taken-branch interrupt-poll quirk (6502): a taken branch that does NOT cross a
+// page boundary suppresses the interrupt poll on its final cycle, so an interrupt
+// asserted by its penultimate cycle defers to after the following instruction. Taken
+// cross-page branches and not-taken branches poll normally. Source: 64doc, Lorenz.
+static uint16_t branch_pushed_pc(uint16_t base, const uint8_t *prog, int plen,
+                                 uint8_t p_init, bool nmi, int assert_cycle) {
+    all_ram();
+    for (int i = 0; i < 0x400; i++) { mem_write((uint16_t)(0x0400 + i), 0xEA); }  // NOP fill
+    for (int i = 0; i < plen; i++) { mem_write((uint16_t)(base + i), prog[i]); }
+    mem_write(0xFFFE, 0x00); mem_write(0xFFFF, 0x08);  // IRQ/BRK vector -> $0800
+    mem_write(0xFFFA, 0x00); mem_write(0xFFFB, 0x08);  // NMI vector -> $0800
+    cpu.pc = base; cpu.sp = 0xFF; cpu.p = p_init; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1; cpu.intr_latched = false; cpu.nmi_pending = 0;
+    for (int f = 0; f < 4; f++) { cpu6502_tick(&cpu); }  // flush recognition pipeline
+    cpu.pc = base; cpu.sp = 0xFF; cpu.cycle = 0; cpu.in_interrupt = false; cpu.intr_latched = false;
+    cpu.p = p_init;
+    int cyc = 0;
+    for (int s = 0; s < 60; s++) {
+        if (cyc == assert_cycle) {
+            if (nmi) { cpu.nmi_line = 0; } else { cpu.irq_line = 0; }
+        }
+        bool was_in = cpu.in_interrupt;
+        cpu6502_tick(&cpu);
+        cyc++;
+        if (!was_in && cpu.in_interrupt) { return cpu.pc; }
+    }
+    return 0xFFFF;
+}
+
+static void test_branch_interrupt_poll(void) {
+    uint8_t beq[] = {0xF0, 0x0E};  // BEQ +$0E: taken (Z set) -> $0410, same page
+    // Taken, no page cross: an interrupt at the penultimate cycle defers one instruction.
+    CHECK_EQ(branch_pushed_pc(0x0400, beq, 2, 0x22, false, 1), 0x0411,
+             "IRQ on taken no-cross branch defers to the next instruction");
+    CHECK_EQ(branch_pushed_pc(0x0400, beq, 2, 0x22, true, 1), 0x0411,
+             "NMI on taken no-cross branch defers to the next instruction");
+    // Not taken (Z clear): plain 2-cycle timing, no quirk.
+    CHECK_EQ(branch_pushed_pc(0x0400, beq, 2, 0x20, false, 1), 0x0403,
+             "IRQ on not-taken branch: normal recognition, no quirk");
+    // Taken WITH page cross ($04FB -> $051D): normal timing, no quirk.
+    uint8_t beqc[] = {0xF0, 0x20};
+    CHECK_EQ(branch_pushed_pc(0x04FB, beqc, 2, 0x22, false, 1), 0x051D,
+             "IRQ on taken cross-page branch: normal recognition, no quirk");
+    CHECK_EQ(branch_pushed_pc(0x04FB, beqc, 2, 0x22, true, 1), 0x051D,
+             "NMI on taken cross-page branch: normal recognition, no quirk");
+}
+
 // The SO (Set Overflow) input pin. A negative transition sets V; it is edge-
 // triggered, not level (holding SO low does not re-set V after a CLV). The 6510
 // leaves SO idle high, so this never fires for the C64; the 1541 wires BYTE READY
@@ -625,6 +672,7 @@ int main(void) {
     test_rmw_dummy_write();
     test_interrupt_edge_cases();
     test_interrupt_recognition_point();
+    test_branch_interrupt_poll();
     test_so_pin();
     return TEST_SUMMARY("cpu");
 }

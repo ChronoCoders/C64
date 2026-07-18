@@ -898,6 +898,9 @@ static void branch(uint8_t mask, bool when_set) {
             uint16_t same_page = (uint16_t)((cpu.pc & 0xFF00) | (target & 0xFF));
             cpu.pc = same_page;
             cpu.cycle = (same_page == target) ? 0 : 3;
+            // Taken branch, no page cross: the last cycle does not poll for
+            // interrupts (6502 quirk), so a pending interrupt defers one instruction.
+            if (same_page == target) { cpu.intr_freeze = true; }
             break;
         }
         case 3:
@@ -1742,6 +1745,7 @@ void cpu6502_reset(CPU6502 *c) {
     cpu.intr_latched = false;
     cpu.intr_sample = false;
     cpu.intr_sample_nmi = false;
+    cpu.intr_freeze = false;
 }
 
 void cpu6502_tick(CPU6502 *c) {
@@ -1778,9 +1782,13 @@ void cpu6502_tick(CPU6502 *c) {
     // an instruction's last cycle therefore defers to after the next instruction. This
     // one-cycle delay also preserves the CLI/SEI/PLP I-flag delay and RTI immediacy:
     // the sample uses each cycle's post-execution flags, matched to the delay.
-    cpu.intr_latched = cpu.intr_sample;
-    cpu.intr_is_nmi = cpu.intr_sample_nmi;
-    cpu.intr_sample = poll_interrupt(&cpu.intr_sample_nmi);
+    if (cpu.intr_freeze) {
+        cpu.intr_freeze = false;  // taken no-cross branch: skip this cycle's poll
+    } else {
+        cpu.intr_latched = cpu.intr_sample;
+        cpu.intr_is_nmi = cpu.intr_sample_nmi;
+        cpu.intr_sample = poll_interrupt(&cpu.intr_sample_nmi);
+    }
 }
 
 bool cpu6502_halted(const CPU6502 *c) { return c->halted; }

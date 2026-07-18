@@ -42,6 +42,7 @@ typedef struct {
     bool intr_is_nmi;
     bool intr_sample;      // this cycle's raw interrupt sample; one-cycle delay pipeline
     bool intr_sample_nmi;  // whether intr_sample is an NMI
+    bool intr_freeze;      // suppress this cycle's interrupt poll (taken no-cross branch)
 
     // Per-instance bus.
     void *ctx;
