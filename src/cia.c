@@ -189,15 +189,17 @@ static void timer_apply_cr(Timer *t, bool phi2_input) {
 }
 
 static void cia_update_interrupt(CIA *c) {
-    // The line follows the ICR through a one-clock delay pipeline; once set, the
-    // IR flag latches until the ICR is read.
-    if ((c->icr_data & c->icr_mask & 0x1Fu) != 0) {
+    // The IR bit (bit 7) and the /IRQ line assert together, one phi2 clock after a
+    // masked source flag appears, and both latch until the ICR is read. Feed the
+    // delay pipeline with the masked-flag signal; its delayed output sets the
+    // latched IR bit, and the line follows that bit. Setting the IR bit on the raw
+    // flag instead would expose bit 7 a cycle early on a direct ICR read (Lorenz).
+    bool masked = (c->icr_data & c->icr_mask & 0x1Fu) != 0;
+    c->irq_delay = (uint8_t)((c->irq_delay << 1) | (masked ? 1u : 0u));
+    if ((c->irq_delay & 0x02u) != 0) {
         c->icr_data |= ICR_IR;
     }
-    bool want = (c->icr_data & ICR_IR) != 0;
-    // one phi2 clock of delay before the line asserts
-    c->irq_delay = (uint8_t)((c->irq_delay << 1) | (want ? 1u : 0u));
-    bool line = (c->irq_delay & 0x02u) != 0 || (c->irq_out && want);
+    bool line = (c->icr_data & ICR_IR) != 0;
     if (line != c->irq_out) {
         cia_set_line(c, line);
     }

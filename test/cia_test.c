@@ -174,6 +174,40 @@ static void test_interrupt_delay_pipeline(void) {
     CHECK_EQ(lag_ok, 1, "IRQ line asserts one clock after the flag (Lorenz)");
 }
 
+// The ICR read exposes the same one-clock delay: bit 7 (IR) tracks the /IRQ line,
+// not the raw source flag. In the cycle a masked flag first appears, an ICR read
+// shows bit 0 set but bit 7 clear; one cycle later both are set. Lorenz IRQ/NMI.
+static void test_icr_ir_bit_tracks_delayed_line(void) {
+    // Find the underflow cycle by peeking the flag (a peek does not clear the ICR).
+    cia_init();
+    cia1_write(ICR, 0x81);
+    cia1_write(TALO, 0x03);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x19);  // start + force-load + one-shot
+    int uf = -1;
+    for (int k = 1; k <= 12 && uf < 0; k++) {
+        cia_clock();
+        if (cia_icr_flags(0) & 0x01) { uf = k; }
+    }
+    CHECK(uf > 0, "Timer A underflows within the window");
+    // A destructive ICR read AT the underflow cycle: bit 0 set, bit 7 not yet.
+    cia_init();
+    cia1_write(ICR, 0x81);
+    cia1_write(TALO, 0x03);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x19);
+    for (int k = 0; k < uf; k++) { cia_clock(); }
+    CHECK_EQ(cia1_read(ICR), 0x01, "ICR read at the flag cycle: bit0 set, IR bit clear");
+    // One cycle later: bit 0 and the IR bit both set.
+    cia_init();
+    cia1_write(ICR, 0x81);
+    cia1_write(TALO, 0x03);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x19);
+    for (int k = 0; k < uf + 1; k++) { cia_clock(); }
+    CHECK_EQ(cia1_read(ICR), 0x81, "ICR read one cycle later: bit0 and IR bit both set");
+}
+
 // CIA2's interrupt drives NMI, not IRQ.
 static void test_cia2_drives_nmi(void) {
     cia_init();
@@ -365,6 +399,7 @@ int main(void) {
     test_timer_cascade();
     test_icr_mask_and_read_clear();
     test_interrupt_delay_pipeline();
+    test_icr_ir_bit_tracks_delayed_line();
     test_cia2_drives_nmi();
     test_keyboard_matrix();
     test_keyboard_joystick_sharing();
