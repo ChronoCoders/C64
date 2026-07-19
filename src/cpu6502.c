@@ -1116,6 +1116,14 @@ static void int_push_vector(void) {
                                 cpu.data);  // vector high
             cpu.cycle = 0;
             cpu.in_interrupt = false;
+            // The interrupt sequence does not poll for interrupts, so a pending
+            // interrupt defers until after the handler's first instruction (the 6502
+            // "at least one handler instruction runs" rule). Discard the sample taken
+            // during the sequence so recognition cannot fire at the handler-entry
+            // boundary; the source (nmi_pending edge / irq level) is untouched and is
+            // re-sampled next cycle. Clearing the sample (not freezing the pipeline)
+            // leaves the I-masked IRQ path unchanged: its sample is already clear.
+            cpu.intr_sample = false;
             break;
     }
 }

@@ -634,6 +634,61 @@ static void test_branch_interrupt_poll(void) {
              "NMI on taken cross-page branch: normal recognition, no quirk");
 }
 
+// Interrupt-sequence poll deferral (6502): the interrupt sequence (BRK / hardware IRQ /
+// hardware NMI) does NOT poll for interrupts on its final cycle, so a pending interrupt
+// defers until AFTER the handler's first instruction runs ("at least one handler
+// instruction always executes"). A probe NMI pending at handler entry is therefore
+// serviced after the entry NOP (pushed PC = handler+1 = $0701), never at the handler
+// entry ($0700). Source: perfect6502 (BRK, IRQ, and NMI entry all service earliest at
+// handler+1, never at entry). The rule is shared across all three entry sequences.
+typedef enum { ENTRY_BRK, ENTRY_IRQ, ENTRY_NMI } EntryKind;
+
+static uint16_t entry_probe_pushed_pc(EntryKind kind, int probe_cycle) {
+    all_ram();
+    for (int i = 0; i < 0x400; i++) { mem_write((uint16_t)(0x0400 + i), 0xEA); }  // NOP fill
+    for (int i = 0; i < 8; i++) { mem_write((uint16_t)(0x0700 + i), 0xEA); }
+    mem_write(0x0703, 0x40);  // handler @ $0700 = NOP, NOP, NOP, RTI
+    if (kind == ENTRY_BRK) { mem_write(0x0410, 0x00); }  // BRK; else NOP, IRQ/NMI-driven
+    mem_write(0xFFFE, 0x00); mem_write(0xFFFF, 0x07);    // IRQ/BRK vector -> $0700
+    mem_write(0xFFFA, 0x00); mem_write(0xFFFB, 0x07);    // NMI vector -> $0700
+    cpu.pc = 0x0410; cpu.sp = 0xFF; cpu.p = 0x20; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1; cpu.intr_latched = false;
+    cpu.intr_sample = false; cpu.intr_sample_nmi = false; cpu.intr_freeze = false; cpu.nmi_pending = 0;
+    for (int f = 0; f < 4; f++) { cpu6502_tick(&cpu); }  // flush recognition pipeline
+    cpu.pc = 0x0410; cpu.sp = 0xFF; cpu.p = 0x20; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.intr_latched = false; cpu.intr_sample = false; cpu.intr_sample_nmi = false; cpu.nmi_pending = 0;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1;
+    int probed = 0, first_edge = 0, services = 0;
+    for (int acnt = 0; acnt < 400; acnt++) {
+        if (kind == ENTRY_IRQ && acnt == 0) { cpu.irq_line = 0; }  // level IRQ, I clear
+        if (kind == ENTRY_NMI && !first_edge && acnt == 0) { cpu.nmi_line = 0; first_edge = 1; }
+        if (kind == ENTRY_NMI && first_edge == 1 && acnt == 3) { cpu.nmi_line = 1; first_edge = 2; }
+        if (!probed && acnt == probe_cycle) { cpu.nmi_line = 0; probed = 1; }  // probe NMI edge
+        bool was_in = cpu.in_interrupt;
+        cpu6502_tick(&cpu);
+        if (!was_in && cpu.in_interrupt) {
+            services++;
+            // BRK is not a hardware service, so its probe NMI is service #1; a hardware
+            // IRQ/NMI entry is service #1 and the probe NMI is service #2.
+            int want = (kind == ENTRY_BRK) ? 1 : 2;
+            if (services == want) { return cpu.pc; }
+            if (kind == ENTRY_IRQ) { cpu.irq_line = 1; }  // release after the entry
+        }
+    }
+    return 0xFFFF;
+}
+
+static void test_brk_interrupt_poll(void) {
+    // Probe cycles chosen at each sequence's final cycle (past any hijack window): the
+    // probe NMI is pending at handler entry. HW defers it past the entry NOP -> $0701.
+    CHECK_EQ(entry_probe_pushed_pc(ENTRY_BRK, 5), 0x0701,
+             "BRK: pending NMI defers past the handler's first instruction");
+    CHECK_EQ(entry_probe_pushed_pc(ENTRY_IRQ, 7), 0x0701,
+             "hardware IRQ: pending NMI defers past the handler's first instruction");
+    CHECK_EQ(entry_probe_pushed_pc(ENTRY_NMI, 7), 0x0701,
+             "hardware NMI: pending NMI defers past the handler's first instruction");
+}
+
 // The SO (Set Overflow) input pin. A negative transition sets V; it is edge-
 // triggered, not level (holding SO low does not re-set V after a CLV). The 6510
 // leaves SO idle high, so this never fires for the C64; the 1541 wires BYTE READY
@@ -673,6 +728,7 @@ int main(void) {
     test_interrupt_edge_cases();
     test_interrupt_recognition_point();
     test_branch_interrupt_poll();
+    test_brk_interrupt_poll();
     test_so_pin();
     return TEST_SUMMARY("cpu");
 }
