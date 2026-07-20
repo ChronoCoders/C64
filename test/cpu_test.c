@@ -689,6 +689,75 @@ static void test_brk_interrupt_poll(void) {
              "hardware NMI: pending NMI defers past the handler's first instruction");
 }
 
+// BRK/NMI vector hijack (6502): an NMI asserted by BRK cycle 4 redirects the vector
+// fetch from $FFFE to $FFFA, but the sequence stays a BRK in every other respect, the
+// pushed PC is still BRK+2 and the pushed P still has B set. Asserted at cycle 5 or
+// later the vector latch has already been made, so BRK takes $FFFE. An IRQ never
+// redirects the vector (IRQ and BRK share $FFFE, and B stays set). The hijack is the
+// NMI's service: it consumes the edge, so the NMI is not taken again afterwards.
+// Source: perfect6502 sweep of /NMI and /IRQ across every BRK cycle.
+static uint16_t brk_vector_taken(int assert_cycle, bool nmi, uint16_t *pushed_pc,
+                                 uint8_t *pushed_p) {
+    all_ram();
+    for (int i = 0; i < 0x500; i++) { mem_write((uint16_t)(0x0400 + i), 0xEA); }
+    mem_write(0x0410, 0x00);                          // BRK
+    mem_write(0xFFFE, 0x00); mem_write(0xFFFF, 0x07); // IRQ/BRK vector -> $0700
+    mem_write(0xFFFA, 0x00); mem_write(0xFFFB, 0x08); // NMI vector -> $0800
+    cpu.pc = 0x0410; cpu.sp = 0xFF; cpu.p = 0x20; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1; cpu.intr_latched = false;
+    cpu.intr_sample = false; cpu.intr_sample_nmi = false; cpu.intr_freeze = false;
+    cpu.nmi_pending = 0;
+    for (int f = 0; f < 4; f++) { cpu6502_tick(&cpu); }  // flush recognition pipeline
+    cpu.pc = 0x0410; cpu.sp = 0xFF; cpu.p = 0x20; cpu.cycle = 0; cpu.in_interrupt = false;
+    cpu.intr_latched = false; cpu.intr_sample = false; cpu.intr_sample_nmi = false;
+    cpu.irq_line = 1; cpu.nmi_line = 1; cpu.nmi_last = 1; cpu.nmi_pending = 0;
+    // Tick 0 is the BRK opcode fetch, matching the reference's cycle numbering.
+    for (int t = 0; t < 7; t++) {
+        if (t == assert_cycle) {
+            if (nmi) { cpu.nmi_line = 0; } else { cpu.irq_line = 0; }
+        }
+        cpu6502_tick(&cpu);
+    }
+    *pushed_pc = (uint16_t)((mem_read(0x01FF) << 8) | mem_read(0x01FE));
+    *pushed_p = mem_read(0x01FD);
+    return cpu.pc;  // the handler the vector fetch landed on
+}
+
+static void test_brk_nmi_vector_hijack(void) {
+    uint16_t pc; uint8_t p;
+    // Asserted by the push-PCL cycle (3): hijacked to the NMI vector ($0800).
+    for (int t = 0; t <= 3; t++) {
+        CHECK_EQ(brk_vector_taken(t, true, &pc, &p), 0x0800,
+                 "NMI by the push-PCL cycle hijacks the vector to $FFFA");
+        CHECK_EQ(pc, 0x0412, "hijacked BRK still pushes BRK+2");
+        CHECK_EQ(p & FLAG_B, FLAG_B, "hijacked BRK still pushes B set");
+    }
+    // From the push-P cycle (4) on: the vector is already latched, BRK takes $0700.
+    for (int t = 4; t <= 6; t++) {
+        CHECK_EQ(brk_vector_taken(t, true, &pc, &p), 0x0700,
+                 "NMI from the push-P cycle on is too late to hijack");
+        CHECK_EQ(pc, 0x0412, "un-hijacked BRK pushes BRK+2");
+        CHECK_EQ(p & FLAG_B, FLAG_B, "un-hijacked BRK pushes B set");
+    }
+    // An IRQ never redirects the vector, at any BRK cycle.
+    for (int t = 0; t <= 6; t++) {
+        CHECK_EQ(brk_vector_taken(t, false, &pc, &p), 0x0700,
+                 "IRQ never hijacks the BRK vector");
+        CHECK_EQ(p & FLAG_B, FLAG_B, "IRQ during BRK leaves B set");
+    }
+    // The redirect is the NMI's service, so it consumes the edge: no second NMI
+    // sequence follows a hijacked BRK (the line stays low, and NMI is edge-triggered).
+    brk_vector_taken(0, true, &pc, &p);
+    CHECK_EQ(cpu.nmi_pending, 0, "a hijacked BRK consumes the NMI edge");
+    int second = 0;
+    for (int t = 0; t < 40; t++) {
+        bool was_in = cpu.in_interrupt;
+        cpu6502_tick(&cpu);
+        if (!was_in && cpu.in_interrupt) { second = 1; }
+    }
+    CHECK_EQ(second, 0, "no second NMI service after a hijacked BRK");
+}
+
 // The SO (Set Overflow) input pin. A negative transition sets V; it is edge-
 // triggered, not level (holding SO low does not re-set V after a CLV). The 6510
 // leaves SO idle high, so this never fires for the C64; the 1541 wires BYTE READY
@@ -729,6 +798,7 @@ int main(void) {
     test_interrupt_recognition_point();
     test_branch_interrupt_poll();
     test_brk_interrupt_poll();
+    test_brk_nmi_vector_hijack();
     test_so_pin();
     return TEST_SUMMARY("cpu");
 }

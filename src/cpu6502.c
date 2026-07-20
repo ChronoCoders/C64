@@ -1097,6 +1097,17 @@ static void int_push_vector(void) {
         case 3:
             bus_write(STACK(cpu.sp), (uint8_t)(cpu.pc & 0xFF));  // push PCL
             cpu.sp--;
+            // Vector hijack: the vector is selected here, before the P push, so an NMI
+            // pending by this cycle redirects a $FFFE sequence (BRK or hardware IRQ)
+            // to $FFFA; from the next cycle the choice is already made. Only the
+            // vector changes: the pushed PC is already committed and the B bit pushed
+            // below still reflects the original source. The redirect IS the NMI's
+            // service, so it consumes the edge. An IRQ never redirects, it shares
+            // $FFFE with BRK.
+            if (cpu.nmi_pending && cpu.int_vector == 0xFFFE) {
+                cpu.int_vector = 0xFFFA;
+                cpu.nmi_pending = 0;
+            }
             cpu.cycle = 4;
             break;
         case 4:
