@@ -11,7 +11,16 @@
 
 // Open a window/renderer/texture sized for a width x height ARGB8888
 // framebuffer (scaled up for display). Returns false on failure.
-bool host_init(int width, int height, const char *title);
+// Window scale: the framebuffer is always rendered at VIC_FB_WIDTH x VIC_FB_HEIGHT;
+// scale only multiplies the output window. Present cost grows with the scaled
+// pixel count, so a constrained compositor may need a smaller window.
+#define HOST_SCALE_MIN 1
+#define HOST_SCALE_MAX 4
+#define HOST_SCALE_DEFAULT 3
+
+/// Opens the window at width*scale by height*scale. Returns false if scale is
+/// outside HOST_SCALE_MIN..HOST_SCALE_MAX or the display cannot be opened.
+bool host_init(int width, int height, int scale, const char *title);
 
 // Human-readable description of the last host failure (the SDL error string).
 const char *host_error(void);

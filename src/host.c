@@ -14,7 +14,6 @@
 
 // Integer upscale from the VIC framebuffer to the window; SDL's logical size
 // keeps the aspect ratio and lets the window be resized freely.
-#define HOST_SCALE 3
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
@@ -84,7 +83,10 @@ static char base_title[64];        // window title, for appending the [WARP]/[JO
 #define LSHIFT_ROW 1u
 #define LSHIFT_COL 7u
 
-bool host_init(int width, int height, const char *title) {
+bool host_init(int width, int height, int scale, const char *title) {
+    if (scale < HOST_SCALE_MIN || scale > HOST_SCALE_MAX) {
+        return false;  // caller validates and reports; never silently clamped
+    }
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         return false;
     }
@@ -96,7 +98,7 @@ bool host_init(int width, int height, const char *title) {
     fb_pitch = width * (int)sizeof(uint32_t);
     SDL_snprintf(base_title, sizeof(base_title), "%s", title);
     window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                              width * HOST_SCALE, height * HOST_SCALE,
+                              width * scale, height * scale,
                               SDL_WINDOW_RESIZABLE);
     if (!window) {
         return false;

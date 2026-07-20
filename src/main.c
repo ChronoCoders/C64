@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpu.h"
@@ -51,8 +52,12 @@ static bool load_roms(void) {
     return false;
 }
 
+// Output window scale, --scale N. Presentation only: the framebuffer is always
+// rendered at the VIC's own resolution, so this cannot affect emulation.
+static int window_scale = HOST_SCALE_DEFAULT;
+
 static int run_visible(void) {
-    if (!host_init(vic_fb_width(), vic_fb_height(), WINDOW_TITLE)) {
+    if (!host_init(vic_fb_width(), vic_fb_height(), window_scale, WINDOW_TITLE)) {
         printf("C64: could not open a display window (%s). Is a display "
                "available? Try --headless.\n", host_error());
         return 1;
@@ -141,6 +146,16 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) {
             headless = true;
+        } else if (strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
+            const char *arg = argv[++i];
+            char *end = NULL;
+            long v = strtol(arg, &end, 10);
+            if (end == arg || *end != '\0' || v < HOST_SCALE_MIN || v > HOST_SCALE_MAX) {
+                printf("C64: --scale must be an integer %d..%d (got \"%s\").\n",
+                       HOST_SCALE_MIN, HOST_SCALE_MAX, arg);
+                return 1;
+            }
+            window_scale = (int)v;
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
             const char *path = argv[++i];
             if (disk_mount(path)) {

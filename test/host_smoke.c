@@ -13,7 +13,7 @@ static uint32_t fb[384u * 272u];
 
 int main(void) {
     cia_init();  // host_poll routes keys through cia_key_set
-    if (!host_init(384, 272, "smoke")) {
+    if (!host_init(384, 272, HOST_SCALE_DEFAULT, "smoke")) {
         return 0;  // no dummy video backend available: nothing to exercise
     }
     host_audio_init(44100);
