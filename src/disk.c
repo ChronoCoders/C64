@@ -114,6 +114,8 @@ static bool mounted;
 static bool clean_path;             // mounted from a validated file, so write-back is safe
 static char mount_path[4096];
 static uint8_t disk_id1, disk_id2;
+static uint8_t error_info[DISK_TOTAL_SECTORS];  // per-sector DOS status, if the image carried it
+static bool has_error_info;
 static uint8_t gcr_tracks[DISK_TRACKS][GCR_TRACK_MAXBYTES];
 static unsigned gcr_nbytes[DISK_TRACKS];
 
@@ -184,8 +186,12 @@ static bool mount_validate_and_build(void) {
 
 bool disk_mount_image(const uint8_t *data, size_t len) {
     disk_unmount();
-    if (len != D64_STD_SIZE) { return false; }  // only 35-track, no-error images
+    if (len != D64_STD_SIZE && len != D64_ERR_SIZE) { return false; }  // 35-track only
     memcpy(image, data, D64_STD_SIZE);
+    has_error_info = (len == D64_ERR_SIZE);
+    if (has_error_info) {
+        memcpy(error_info, &data[D64_STD_SIZE], DISK_TOTAL_SECTORS);
+    }
     return mount_validate_and_build();
 }
 
@@ -194,9 +200,16 @@ bool disk_mount(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) { return false; }
     size_t n = fread(image, 1u, D64_STD_SIZE, f);
-    int extra = fgetc(f);  // reject anything longer than a standard image
+    uint8_t err[DISK_TOTAL_SECTORS];
+    size_t e = fread(err, 1u, DISK_TOTAL_SECTORS, f);  // optional error-info block
+    int extra = fgetc(f);  // reject anything longer than either accepted size
     fclose(f);
     if (n != D64_STD_SIZE || extra != EOF) { return false; }
+    if (e != 0u && e != DISK_TOTAL_SECTORS) { return false; }
+    has_error_info = (e == DISK_TOTAL_SECTORS);
+    if (has_error_info) {
+        memcpy(error_info, err, DISK_TOTAL_SECTORS);
+    }
     if (!mount_validate_and_build()) { return false; }
     // Remember where a clean 35-track image came from, so it can be written back.
     size_t plen = strlen(path);
@@ -210,6 +223,7 @@ bool disk_mount(const char *path) {
 void disk_unmount(void) {
     mounted = false;
     clean_path = false;
+    has_error_info = false;
     mount_path[0] = '\0';
     memset(gcr_nbytes, 0, sizeof(gcr_nbytes));
 }
@@ -302,6 +316,13 @@ bool disk_writeback(void) {
     FILE *f = fopen(mount_path, "wb");
     if (f == NULL) { return false; }
     size_t n = fwrite(image, 1u, D64_STD_SIZE, f);
+    // Preserve the error-info block: writing the data alone would truncate the file
+    // and drop the per-sector status the image came with.
+    if (has_error_info) {
+        n += fwrite(error_info, 1u, DISK_TOTAL_SECTORS, f);
+        fclose(f);
+        return n == D64_ERR_SIZE;
+    }
     fclose(f);
     return n == D64_STD_SIZE;
 }

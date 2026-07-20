@@ -19,6 +19,9 @@
 #define DISK_TOTAL_SECTORS 683u
 // A standard 35-track image with no error information: 683 sectors of 256 bytes.
 #define D64_STD_SIZE 174848u
+// A .d64 may carry a trailing error-info block: one 1541 DOS status byte per
+// sector ($01 = no error), so the file is DISK_TOTAL_SECTORS bytes longer.
+#define D64_ERR_SIZE (D64_STD_SIZE + DISK_TOTAL_SECTORS)
 
 // Geometry, one source of truth. Track is 1..35.
 unsigned disk_sectors_in_track(unsigned track);   // 21 / 19 / 18 / 17 by zone

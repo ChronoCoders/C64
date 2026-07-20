@@ -171,6 +171,54 @@ static void mount_blank(void) {
     memset(z, 0, sizeof(z));
     CHECK_EQ(disk_mount_image(z, sizeof(z)) ? 1 : 0, 1, "blank image mounts");
 }
+// A .d64 may carry a trailing error-info block: one status byte per sector of a
+// 35-track disk (17x21 + 7x19 + 6x18 + 5x17 = 683), making the file 175531 bytes.
+// Each byte is the 1541 DOS status that sector's read produced when the disk was
+// imaged ($01 = no error, $05 = data checksum error / DOS 23, and so on). Per-sector
+// read errors are not modelled here, so the block is accepted and kept but does not
+// change what a read returns; the sector data must decode exactly as in the plain
+// form. Sizes that are neither 174848 nor 175531 stay rejected.
+static void test_d64_error_info_variant(void) {
+    static uint8_t img[D64_ERR_SIZE];
+    memset(img, 0, sizeof(img));
+    for (unsigned i = 0; i < 256u; i++) { img[i] = (uint8_t)(i ^ 0x5Au); }  // t1 s0 payload
+    memset(img + D64_STD_SIZE, 0x01, DISK_TOTAL_SECTORS);  // every sector read clean
+    img[D64_STD_SIZE + 100u] = 0x05;                       // one deliberate DOS 23
+
+    CHECK_EQ(disk_mount_image(img, D64_ERR_SIZE) ? 1 : 0, 1,
+             "175531-byte .d64 with an error-info block mounts");
+    uint8_t sec[256];
+    CHECK_EQ(disk_read_sector(1, 0, sec) ? 1 : 0, 1, "error-info image reads track 1 sector 0");
+    int same = 1;
+    for (unsigned i = 0; i < 256u; i++) { if (sec[i] != (uint8_t)(i ^ 0x5Au)) { same = 0; } }
+    CHECK_EQ(same, 1, "trailing error-info block does not disturb the sector data");
+
+    CHECK_EQ(disk_mount_image(img, D64_STD_SIZE) ? 1 : 0, 1,
+             "plain 174848-byte .d64 still mounts");
+    CHECK_EQ(disk_mount_image(img, D64_STD_SIZE + 1u) ? 1 : 0, 0, "174849 bytes rejected");
+    CHECK_EQ(disk_mount_image(img, D64_ERR_SIZE - 1u) ? 1 : 0, 0, "175530 bytes rejected");
+    CHECK_EQ(disk_mount_image(img, 100000u) ? 1 : 0, 0, "an arbitrary size is rejected");
+
+    // disk_mount() reads from a file and has its own length check; cover both sizes.
+    const char *pe = "build/errinfo_test.d64";
+    FILE *f = fopen(pe, "wb");
+    if (f != NULL) {
+        fwrite(img, 1u, D64_ERR_SIZE, f);
+        fclose(f);
+        CHECK_EQ(disk_mount(pe) ? 1 : 0, 1, "175531-byte .d64 mounts from a file");
+        remove(pe);
+    }
+    const char *pl = "build/errinfo_long.d64";
+    f = fopen(pl, "wb");
+    if (f != NULL) {
+        fwrite(img, 1u, D64_ERR_SIZE, f);
+        fputc(0, f);  // one byte too many: neither valid size
+        fclose(f);
+        CHECK_EQ(disk_mount(pl) ? 1 : 0, 0, "175532-byte file is rejected from a file");
+        remove(pl);
+    }
+}
+
 static void motor_on(void) {
     drive_bus_poke(0x1C02, 0x04);  // VIA2 DDRB: PB2 (motor) output
     drive_bus_poke(0x1C00, 0x04);  // VIA2 ORB:  PB2 = 1, motor on
@@ -717,6 +765,7 @@ static void drive_fast(const char *synth) {
     test_sync_and_byte_ready();
     test_byte_ready_rate_per_zone();
     test_disk_optional();
+    test_d64_error_info_variant();
 }
 
 // DOS-integration checks (LOAD/SAVE/NEW/BAM/writeback through the GCR surface):
