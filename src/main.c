@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "debug.h"
 #include "host.h"
 #include "cia.h"
 #include "disk.h"
@@ -167,8 +168,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (headless) {
-        return run_headless();
-    }
-    return run_visible();
+    debug_init_from_env();
+    int rc = headless ? run_headless() : run_visible();
+    debug_shutdown();
+    return rc;
 }

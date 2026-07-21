@@ -1,6 +1,7 @@
 #include "bus.h"
 
 #include "cia.h"
+#include "debug.h"
 #include "mem.h"
 #include "sid.h"
 #include "vic.h"
@@ -57,7 +58,7 @@ static void io_write(uint16_t addr, uint8_t val) {
 //   $DC00-$DCFF -> CIA1 (IRQ), mirrored every 16 bytes
 //   $DD00-$DDFF -> CIA2 (NMI), mirrored every 16 bytes
 //   $DE00-$DFFF -> expansion I/O (stub)
-uint8_t bus_read(uint16_t addr) {
+static uint8_t bus_read_dispatch(uint16_t addr) {
     if (mem_region(addr) == MEM_IO) {
         if (addr < 0xD400) {
             return vic_read(addr);
@@ -79,7 +80,14 @@ uint8_t bus_read(uint16_t addr) {
     return mem_banked_read(addr);
 }
 
+uint8_t bus_read(uint16_t addr) {
+    uint8_t val = bus_read_dispatch(addr);
+    DEBUG_ON_READ(addr, val);
+    return val;
+}
+
 void bus_write(uint16_t addr, uint8_t val) {
+    DEBUG_ON_WRITE(addr, val);
     if (mem_region(addr) == MEM_IO) {
         if (addr < 0xD400) {
             vic_write(addr, val);

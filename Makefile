@@ -9,7 +9,16 @@ else
 OPT = -O0 -g
 endif
 
-CFLAGS = $(CSTD) $(WARN) $(OPT)
+# Opt-in debug instrumentation (src/debug.c): bus watchpoints and a triggered
+# snapshot. Off by default so the bus path carries no hook in a normal build.
+DEBUG_TOOLS ?= 0
+ifeq ($(DEBUG_TOOLS),1)
+DEBUG_DEF = -DDEBUG_TOOLS=1
+else
+DEBUG_DEF =
+endif
+
+CFLAGS = $(CSTD) $(WARN) $(OPT) $(DEBUG_DEF)
 # The Lorenz conformance runner always builds at -O2, regardless of MODE: it is a
 # long batch job, never stepped in a debugger, and -O2 roughly halves its runtime.
 LORENZ_CFLAGS = $(CSTD) $(WARN) -O2
@@ -24,12 +33,12 @@ BIN = build/c64
 
 # Core objects without main.c or host.c (no SDL), shared by the test runner. The
 # drive is included so the drive suite links; the Lorenz runner does not call it.
-CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
 # One durable unit-test binary per subsystem, plus the Lorenz runner.
-UNIT_TESTS = mem cpu cia sid vic drive via iec gcr
+UNIT_TESTS = mem cpu cia sid vic drive via iec gcr debug
 UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)
@@ -44,6 +53,10 @@ $(BIN): $(SRC)
 $(TEST_BIN): $(TEST_SRC) $(CORE_SRC)
 	@mkdir -p build
 	$(CC) $(LORENZ_CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
+
+build/test-debug: test/debug_test.c test/test.h $(CORE_SRC)
+	@mkdir -p build
+	$(CC) $(CSTD) $(WARN) $(OPT) -DDEBUG_TOOLS=1 -Isrc -Itest $< $(CORE_SRC) -o $@
 
 build/test-%: test/%_test.c test/test.h $(CORE_SRC)
 	@mkdir -p build
@@ -115,6 +128,10 @@ test-slow: $(SLOW_BINS)
 # reasonable time. Run it unsanitized with `make test`.
 ASAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -g
 ASAN_BINS = $(addprefix build/asan-test-,$(UNIT_TESTS))
+
+build/asan-test-debug: test/debug_test.c test/test.h $(CORE_SRC)
+	@mkdir -p build
+	$(CC) $(CSTD) $(WARN) -O1 $(ASAN_FLAGS) -DDEBUG_TOOLS=1 -Isrc -Itest $< $(CORE_SRC) -o $@
 
 build/asan-test-%: test/%_test.c test/test.h $(CORE_SRC)
 	@mkdir -p build
