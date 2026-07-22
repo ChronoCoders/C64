@@ -57,8 +57,7 @@ static uint8_t port_data_read(void) {
 MemRegion mem_region_table[16];
 
 // Resolve the configuration into the routing table. Truth table per the
-// standard C64 no-cartridge case (/GAME=/EXROM=1); cartridge lines are the
-// extension point for future cartridge support. Source: C64 PLA / c64-wiki
+// standard C64 no-cartridge case (/GAME=/EXROM=1). Source: C64 PLA / c64-wiki
 // "Bank Switching".
 void mem_update_config(void) {
     uint8_t lines = port_lines();
