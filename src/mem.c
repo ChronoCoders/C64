@@ -73,7 +73,7 @@ void mem_update_config(void) {
     mem_region_table[0x0C] = MEM_RAM;                                // $C000
     if (charen && (loram || hiram)) {                                // $D000
         mem_region_table[0x0D] = MEM_IO;
-    } else if (hiram) {  // reachable only with CHAREN clear (else I/O above)
+    } else if (hiram || loram) {  // CHAREN clear + LORAM|HIRAM: Character ROM
         mem_region_table[0x0D] = MEM_CHAR;
     } else {
         mem_region_table[0x0D] = MEM_RAM;

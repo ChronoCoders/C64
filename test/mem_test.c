@@ -21,7 +21,7 @@ static const MemRegion want_a000[8] = {
     MEM_RAM, MEM_RAM, MEM_RAM, MEM_BASIC, MEM_RAM, MEM_RAM, MEM_RAM, MEM_BASIC,
 };
 static const MemRegion want_d000[8] = {
-    MEM_RAM, MEM_RAM, MEM_CHAR, MEM_CHAR, MEM_RAM, MEM_IO, MEM_IO, MEM_IO,
+    MEM_RAM, MEM_CHAR, MEM_CHAR, MEM_CHAR, MEM_RAM, MEM_IO, MEM_IO, MEM_IO,
 };
 static const MemRegion want_e000[8] = {
     MEM_RAM, MEM_RAM, MEM_KERNAL, MEM_KERNAL, MEM_RAM, MEM_RAM, MEM_KERNAL, MEM_KERNAL,
