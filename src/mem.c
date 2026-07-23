@@ -13,8 +13,25 @@ static uint8_t rom_kernal[0x2000];  // $E000-$FFFF
 static uint8_t rom_basic[0x2000];   // $A000-$BFFF
 static uint8_t rom_char[0x1000];    // $D000-$DFFF when banked
 
+// Power-on RAM contents. Real DRAM (and VICE) come up in a fixed alternating
+// $00/$FF pattern, not all zeroes; code that reads a location before writing it
+// (e.g. an unpacker's scratch, an uninitialised pointer) sees this, so all-zero
+// RAM is a correctness gap. This matches VICE 3.7.1's default C64 pattern,
+// captured byte-for-byte from a fresh power-on dump of the untouched regions: a
+// period-8 cell repeated, with the whole pattern inverted every 16 KB. VICE also
+// injects ~0.2% random bytes (RAMInitRandomChance); we deliberately omit those to
+// stay deterministic. Source: VICE 3.7.1 default RAMInit convention.
+static const uint8_t ram_power_on_cell[8] = {0x00, 0x00, 0xFF, 0xFF,
+                                             0xFF, 0xFF, 0x00, 0x00};
+
 void mem_init(void) {
-    memset(ram, 0, sizeof(ram));
+    for (unsigned addr = 0; addr < sizeof(ram); addr++) {
+        uint8_t v = ram_power_on_cell[addr & 7u];
+        if ((addr >> 14) & 1u) {
+            v = (uint8_t)~v;  // invert the pattern every other 16 KB block
+        }
+        ram[addr] = v;
+    }
     mem_update_config();
 }
 

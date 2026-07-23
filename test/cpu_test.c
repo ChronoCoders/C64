@@ -154,7 +154,12 @@ static void test_shared_core_equivalence(void) {
         0x4C, 0x0F, 0x02,  // $020F end: JMP $020F (self)
     };
     all_ram();
-    memset(ram2, 0, sizeof(ram2));
+    // Mirror the C64's RAM (power-on pattern and all) into the second core's
+    // private bus so both instances start from identical memory; the test checks
+    // the cores agree, not that uninitialised RAM happens to read zero.
+    for (unsigned i = 0; i < sizeof(ram2); i++) {
+        ram2[i] = mem_read((uint16_t)i);
+    }
     for (unsigned i = 0; i < sizeof(prog); i++) {
         mem_write((uint16_t)(0x0200 + i), prog[i]);
         ram2[0x0200 + i] = prog[i];

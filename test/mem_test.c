@@ -93,9 +93,47 @@ static void test_vic_bank_fetch(void) {
     CHECK_EQ(mem_vic_fetch(0x1000), 0xCD, "odd bank $1000 is RAM, not char ROM");
 }
 
+// Power-on RAM comes up in VICE 3.7.1's default C64 pattern: a period-8 cell
+// [$00 $00 $FF $FF $FF $FF $00 $00] indexed by (addr & 7), the whole pattern
+// inverted every 16 KB. Expected values written out independently here (not read
+// from the production table) so the test actually checks the intended pattern.
+static uint8_t expect_power_on(uint16_t addr) {
+    static const uint8_t cell[8] = {0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00};
+    uint8_t v = cell[addr & 7u];
+    return ((addr >> 14) & 1u) ? (uint8_t)~v : v;
+}
+
+static void test_power_on_pattern(void) {
+    mem_init();
+    // Spot-check the period-8 cell in an even 16 KB block ($0000-$3FFF).
+    CHECK_EQ(mem_read(0x1000), 0x00, "even bank, cell idx 0 = $00");
+    CHECK_EQ(mem_read(0x1002), 0xFF, "even bank, cell idx 2 = $FF");
+    CHECK_EQ(mem_read(0x1005), 0xFF, "even bank, cell idx 5 = $FF");
+    CHECK_EQ(mem_read(0x1006), 0x00, "even bank, cell idx 6 = $00");
+    // Odd 16 KB blocks ($4000-$7FFF, $C000-$FFFF) are inverted.
+    CHECK_EQ(mem_read(0x4000), 0xFF, "odd bank, cell idx 0 inverted = $FF");
+    CHECK_EQ(mem_read(0x4002), 0x00, "odd bank, cell idx 2 inverted = $00");
+    CHECK_EQ(mem_read(0xC000), 0xFF, "bank 3 inverted, cell idx 0 = $FF");
+    CHECK_EQ(mem_read(0x8002), 0xFF, "bank 2 not inverted, cell idx 2 = $FF");
+    // Whole map matches the formula, and RAM is not all-zero.
+    bool all_match = true;
+    bool saw_ff = false;
+    for (unsigned a = 0; a < 0x10000u; a++) {
+        if (mem_read((uint16_t)a) != expect_power_on((uint16_t)a)) {
+            all_match = false;
+        }
+        if (mem_read((uint16_t)a) == 0xFF) {
+            saw_ff = true;
+        }
+    }
+    CHECK(all_match, "every RAM byte matches the power-on pattern");
+    CHECK(saw_ff, "power-on RAM is not all zero");
+}
+
 int main(void) {
     TEST_BEGIN("mem");
     mem_init();
+    test_power_on_pattern();
     test_banking_truth_table();
     test_ram_under_rom();
     test_vic_bank_select();
