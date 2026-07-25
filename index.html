@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commodore 64</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Crect x='2' y='7' width='28' height='18' rx='2' fill='%23c9bfa3'/%3E%3Crect x='2' y='7' width='28' height='4' rx='2' fill='%23ded5bb'/%3E%3Crect x='5' y='13' width='19' height='9' rx='1' fill='%233b3730'/%3E%3Cg fill='%23a89e82'%3E%3Crect x='6' y='14' width='2' height='2'/%3E%3Crect x='9' y='14' width='2' height='2'/%3E%3Crect x='12' y='14' width='2' height='2'/%3E%3Crect x='15' y='14' width='2' height='2'/%3E%3Crect x='18' y='14' width='2' height='2'/%3E%3Crect x='6' y='17' width='2' height='2'/%3E%3Crect x='9' y='17' width='2' height='2'/%3E%3Crect x='12' y='17' width='2' height='2'/%3E%3Crect x='15' y='17' width='2' height='2'/%3E%3Crect x='18' y='17' width='2' height='2'/%3E%3Crect x='8' y='20' width='10' height='2'/%3E%3C/g%3E%3Crect x='25' y='13' width='4' height='9' rx='1' fill='%238a5a3c'/%3E%3C/svg%3E">
+
+<style>
+  :root {
+    /* VIC-II (Pepto) palette, the real 16 */
+    --black:    #000000;
+    --white:    #ffffff;
+    --red:      #68372b;
+    --cyan:     #70a4b2;
+    --purple:   #6f3d86;
+    --green:    #588d43;
+    --blue:     #352879;
+    --yellow:   #b8c76f;
+    --orange:   #6f4f25;
+    --brown:    #433900;
+    --lred:     #9a6759;
+    --dgrey:    #444444;
+    --grey:     #6c6c6c;
+    --lgreen:   #9ad284;
+    --lblue:    #6c5eb5;
+    --lgrey:    #959595;
+  }
+
+  @font-face {
+    font-family: "C64";
+    src: url('https://fonts.cdnfonts.com/s/28850/PetMe64.woff') format('woff'),
+         local("C64 Pro Mono");
+    font-display: swap;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--black);
+    color: var(--lblue);
+    font-family: "C64", "Courier New", monospace;
+    line-height: 1.6;
+    -webkit-font-smoothing: none;
+    image-rendering: pixelated;
+    overflow-x: hidden;
+  }
+
+  /* CRT scanline overlay */
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px
+    );
+    z-index: 9999;
+    mix-blend-mode: multiply;
+  }
+
+  /* shared nav */
+  .topnav {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 50;
+    background: rgba(0,0,0,0.4);
+    border-bottom: 3px solid var(--lblue);
+    padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center;
+    font-family: "C64","Courier New",monospace;
+    font-size: clamp(9px,1.3vw,12px); letter-spacing: 1px;
+  }
+  .topnav a { color: var(--lblue); text-decoration: none; }
+  .topnav a:hover { color: var(--yellow); }
+  .topnav a.here { color: var(--yellow); }
+
+  /* ---------- HERO: split, text left, C64 screen right ---------- */
+  .boot {
+    min-height: 100vh;
+    background: var(--black);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(24px, 5vw, 70px);
+    position: relative;
+  }
+  .hero-grid {
+    width: 100%;
+    max-width: 1180px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(30px, 5vw, 70px);
+    align-items: center;
+  }
+  @media (max-width: 820px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+  }
+
+  .hero-copy { color: var(--lblue); }
+  .hero-kicker {
+    font-size: clamp(10px, 1.5vw, 13px); letter-spacing: 3px;
+    color: var(--cyan); margin-bottom: 1.4em;
+  }
+  .hero-title {
+    font-size: clamp(26px, 4.4vw, 48px);
+    line-height: 1.1; color: var(--white); letter-spacing: 2px;
+    margin-bottom: 0.7em;
+  }
+  .hero-title .accent { color: var(--yellow); }
+  .hero-sub {
+    font-size: clamp(13px, 1.8vw, 17px); line-height: 1.7;
+    color: var(--lgrey); letter-spacing: 0.5px; margin-bottom: 2em;
+  }
+  .hero-sub .hl { color: var(--lgreen); }
+  .hero-btns { display: flex; flex-wrap: wrap; gap: 14px; }
+  .hero-btn {
+    display: inline-block; padding: 15px 28px;
+    background: var(--yellow); color: var(--black);
+    border: 3px solid var(--white); font-family: "C64", monospace;
+    font-size: clamp(11px, 1.6vw, 14px); letter-spacing: 1px;
+    text-decoration: none; box-shadow: 6px 6px 0 rgba(0,0,0,0.5);
+    transition: transform 0.1s;
+  }
+  .hero-btn:active { transform: translate(3px,3px); box-shadow: 3px 3px 0 rgba(0,0,0,0.5); }
+  .hero-btn.ghost { background: transparent; color: var(--white); border-color: var(--lblue); }
+
+  /* the C64 screen object on the right */
+  .screen-frame {
+    background: var(--lblue);
+    padding: clamp(16px, 2vw, 26px);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    max-height: calc(100vh - clamp(120px, 20vh, 200px));
+    overflow: hidden;
+    display: flex;
+  }
+  .screen {
+    background: var(--blue);
+    flex: 1;
+    aspect-ratio: 4 / 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(18px, 4%, 34px);
+    box-shadow: 0 0 0 3px rgba(0,0,0,0.25) inset;
+  }
+  .boot-inner { width: 100%; }
+  .boot-line { font-size: clamp(9px, 1.15vw, 13px); letter-spacing: 1px; color: var(--lblue); }
+  .boot-line.dim { opacity: 0.75; }
+  .spacer { height: 0.9em; }
+  .screen-title {
+    margin: 0.7em 0;
+    font-size: clamp(13px, 1.9vw, 22px);
+    line-height: 1.15; color: var(--white); letter-spacing: 1px;
+  }
+  .screen-title .accent { color: var(--yellow); }
+  .ready { font-size: clamp(9px, 1.15vw, 13px); color: var(--lblue); }
+  .cursor {
+    display: inline-block;
+    width: 0.62em; height: 1.05em;
+    background: var(--lblue);
+    vertical-align: text-bottom;
+    animation: blink 1.06s steps(1) infinite;
+    margin-left: 2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .scroll-hint {
+    position: absolute;
+    bottom: clamp(14px, 3vw, 30px);
+    left: 50%; transform: translateX(-50%);
+    font-size: 12px; letter-spacing: 2px;
+    color: var(--white); opacity: 0.6;
+    animation: bob 1.8s ease-in-out infinite;
+  }
+  @keyframes bob { 50% { transform: translateX(-50%) translateY(6px); } }
+
+  /* ---------- SPRITE STRIP ---------- */
+  .sprite-strip {
+    background: var(--black);
+    padding: 40px 20px;
+    display: flex;
+    gap: clamp(20px, 5vw, 60px);
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    border-bottom: 6px solid var(--purple);
+  }
+  .sprite { image-rendering: pixelated; }
+  .sprite:nth-child(1) { animation: hover1 2.4s ease-in-out infinite; }
+  .sprite:nth-child(2) { animation: hover1 2.4s ease-in-out infinite 0.3s; }
+  .sprite:nth-child(3) { animation: hover1 2.4s ease-in-out infinite 0.6s; }
+  .sprite:nth-child(4) { animation: hover1 2.4s ease-in-out infinite 0.9s; }
+  .sprite:nth-child(5) { animation: hover1 2.4s ease-in-out infinite 1.2s; }
+  .sprite:nth-child(6) { animation: hover1 2.4s ease-in-out infinite 1.5s; }
+  .sprite:nth-child(7) { animation: hover1 2.4s ease-in-out infinite 1.8s; }
+  .sprite:nth-child(8) { animation: hover1 2.4s ease-in-out infinite 2.1s; }
+  @keyframes hover1 { 50% { transform: translateY(-10px); } }
+
+  /* ---------- SECTIONS ---------- */
+  section { padding: clamp(50px, 9vw, 110px) 6vw; }
+  .band-black { background: var(--black); color: var(--lblue); }
+  .band-blue  { background: var(--blue);  color: var(--white); }
+  .band-purple{ background: var(--purple);color: var(--white); }
+  .inner { max-width: 900px; margin: 0 auto; }
+
+  .eyebrow {
+    font-size: clamp(11px, 1.8vw, 14px);
+    letter-spacing: 3px;
+    color: var(--yellow);
+    margin-bottom: 1.2em;
+  }
+  .band-black .eyebrow { color: var(--cyan); }
+
+  h2 {
+    font-size: clamp(22px, 5vw, 46px);
+    line-height: 1.15;
+    letter-spacing: 1px;
+    margin-bottom: 0.7em;
+    color: var(--white);
+  }
+  .band-black h2 { color: var(--lgreen); }
+
+  .lead {
+    font-size: clamp(14px, 2.3vw, 21px);
+    line-height: 1.7;
+    letter-spacing: 0.5px;
+  }
+  .lead + .lead { margin-top: 1.2em; }
+  .hl { color: var(--yellow); }
+  .band-black .hl { color: var(--cyan); }
+
+  /* two-machine block */
+  .machines {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: stretch;
+    gap: clamp(16px, 4vw, 40px);
+    margin-top: 3em;
+  }
+  .machine {
+    border: 4px solid var(--white);
+    background: rgba(0,0,0,0.25);
+    padding: 28px 22px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .machine .mname { font-size: clamp(16px, 3vw, 24px); color: var(--yellow); letter-spacing: 2px; margin-bottom: 0.5em; }
+  .machine .mdesc { font-size: clamp(12px, 1.8vw, 15px); color: var(--white); opacity: 0.9; line-height: 1.6; }
+  .machine .mchip { font-size: clamp(10px, 1.5vw, 12px); color: var(--cyan); letter-spacing: 1px; margin-top: 0.9em; }
+  .iec {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    color: var(--yellow);
+    font-size: clamp(10px, 1.6vw, 13px);
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  .iec .wire { font-size: clamp(16px, 3vw, 22px); display: block; margin-bottom: 4px; letter-spacing: 2px; }
+  @media (max-width: 680px) {
+    .machines { grid-template-columns: 1fr; }
+    .iec .wire { transform: rotate(90deg); }
+  }
+
+  /* feature cards */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+    margin-top: 3em;
+  }
+  .card {
+    border: 4px solid var(--lblue);
+    background: var(--black);
+    padding: 26px 22px;
+  }
+  .band-black .card { border-color: var(--cyan); }
+  .card-icon { margin-bottom: 18px; }
+  .card h3 {
+    font-size: clamp(14px, 2.2vw, 18px);
+    color: var(--yellow);
+    letter-spacing: 1px;
+    margin-bottom: 0.6em;
+  }
+  .band-black .card h3 { color: var(--lgreen); }
+  .card p { font-size: clamp(12px, 1.8vw, 14px); line-height: 1.65; color: var(--lgrey); }
+
+  /* stat row */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 30px;
+    margin-top: 3em;
+    text-align: center;
+  }
+  .stat .num { font-size: clamp(30px, 8vw, 60px); color: var(--yellow); line-height: 1; }
+  .stat .lbl {
+    font-size: clamp(11px, 1.8vw, 14px);
+    letter-spacing: 2px;
+    color: var(--white);
+    margin-top: 0.6em;
+    opacity: 0.85;
+  }
+
+  /* reference hub */
+  .refs {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-top: 3em;
+  }
+  @media (max-width: 620px) { .refs { grid-template-columns: 1fr; } }
+  .ref {
+    display: block;
+    border: 4px solid var(--lgreen);
+    background: var(--black);
+    padding: 26px 22px;
+    text-decoration: none;
+    transition: transform 0.1s;
+  }
+  .ref:hover { transform: translate(-2px,-2px); box-shadow: 6px 6px 0 rgba(0,0,0,0.5); }
+  .ref .rname { font-size: clamp(14px, 2.2vw, 18px); color: var(--lgreen); letter-spacing: 1px; margin-bottom: 0.6em; }
+  .ref .rdesc { font-size: clamp(12px, 1.8vw, 14px); color: var(--lgrey); line-height: 1.6; }
+  .ref .rgo { display: block; margin-top: 1em; color: var(--yellow); font-size: clamp(11px, 1.6vw, 13px); letter-spacing: 1px; }
+
+  /* CTA */
+  .cta-wrap { text-align: center; }
+  .btn {
+    display: inline-block;
+    margin: 2em 10px 0;
+    padding: 18px 40px;
+    background: var(--yellow);
+    color: var(--black);
+    border: 4px solid var(--white);
+    font-family: "C64", monospace;
+    font-size: clamp(13px, 2.2vw, 17px);
+    letter-spacing: 2px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 0.1s;
+    box-shadow: 8px 8px 0 var(--black);
+  }
+  .btn:active { transform: translate(4px,4px); box-shadow: 4px 4px 0 var(--black); }
+  .btn.ghost { background: transparent; color: var(--white); box-shadow: 8px 8px 0 rgba(0,0,0,0.4); }
+
+  /* footer */
+  footer {
+    background: var(--black);
+    border-top: 6px solid var(--lblue);
+    padding: 40px 6vw;
+    text-align: center;
+    color: var(--grey);
+    font-size: clamp(11px, 1.8vw, 13px);
+    letter-spacing: 1px;
+  }
+  footer .ready-tiny { color: var(--lblue); margin-bottom: 1em; }
+
+  .type-target { white-space: pre-wrap; }
+
+  /* SID sound control */
+  #sid-ctl { position: fixed; right: 12px; bottom: 12px; z-index: 10000; display: flex; flex-direction: row-reverse; align-items: center; gap: 8px; max-width: min(360px, calc(100vw - 24px)); }
+  #sid-btn {
+    font-family: inherit; font-size: 10px; letter-spacing: 1px;
+    color: var(--yellow); background: var(--black); border: 2px solid var(--yellow);
+    padding: 7px 10px; cursor: pointer; text-transform: uppercase; line-height: 1; white-space: nowrap; flex: none;
+  }
+  #sid-btn:hover { background: var(--yellow); color: var(--black); }
+  #sid-btn:focus-visible { outline: 3px solid var(--lgreen); outline-offset: 3px; }
+  #sid-btn[disabled] { color: var(--grey); border-color: var(--grey); cursor: default; }
+  #sid-btn[disabled]:hover { background: var(--black); color: var(--grey); }
+  #sid-note { font-size: 9px; letter-spacing: 1px; color: var(--grey); text-transform: uppercase; text-align: right; line-height: 1.5; }
+  @media (max-width: 1100px) { #sid-note { display: none; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+  <nav class="topnav">
+    <a href="index.html" class="here">HOME</a>
+    <a href="instructions.html">INSTRUCTION SET</a>
+    <a href="system-map.html">SYSTEM MAP</a>
+    <a href="drive-map.html">DRIVE MAP</a>
+    <a href="keyboard.html">KEYBOARD MAP</a>
+  </nav>
+
+  <!-- HERO: text left, C64 screen right -->
+  <div class="boot">
+    <div class="hero-grid">
+
+      <div class="hero-copy">
+        <div class="hero-kicker">// A COMMODORE 64, REBUILT IN FULL</div>
+        <h1 class="hero-title">The machine you grew up on, down to the <span class="accent">last cycle</span>.</h1>
+        <p class="hero-sub">Not a lookalike. The real thing, chip by chip: the computer <span class="hl">and its disk drive</span>, both running as the machines they were. Scroll down and see what that took.</p>
+        <div class="hero-btns">
+          <a href="https://github.com/ChronoCoders/C64" class="hero-btn">VIEW THE SOURCE</a>
+          <a href="#" class="hero-btn ghost" onclick="document.querySelector('.refs').scrollIntoView({behavior:'smooth'});return false;">EXPLORE THE MACHINE</a>
+        </div>
+      </div>
+
+      <div class="screen-frame">
+        <div class="screen">
+          <div class="boot-inner">
+            <div class="boot-line">**** COMMODORE 64 BASIC V2 ****</div>
+            <div class="boot-line dim">64K RAM SYSTEM&nbsp;&nbsp;38911 BASIC BYTES FREE</div>
+            <div class="spacer"></div>
+            <div class="screen-title">THE 8-BIT<br><span class="accent">LEGEND</span>,<br>CYCLE FOR CYCLE.</div>
+            <div class="boot-line dim">EVERY CHIP. EVERY CYCLE. EVERY PIXEL.</div>
+            <div class="spacer"></div>
+            <div class="ready">READY.<br><span class="type-target" id="typed"></span><span class="cursor"></span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="scroll-hint">&#9660; SCROLL &#9660;</div>
+  </div>
+
+  <!-- SPRITE STRIP -->
+  <div class="sprite-strip" id="spriteStrip"></div>
+
+  <!-- SECTION 1 -->
+  <section class="band-black">
+    <div class="inner">
+      <div class="eyebrow">// THE MACHINE THAT RAISED A GENERATION</div>
+      <h2>You remember exactly how it felt.</h2>
+      <p class="lead">The blue glow. The hum of the drive. That moment the screen lit up and the whole machine was <span class="hl">yours</span>, top to bottom, nothing hidden.</p>
+      <p class="lead">This is that machine, rebuilt in software chip by chip and cycle by cycle, until the games and the demos run <span class="hl">exactly the way they did in 1985</span>.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 2: two machines -->
+  <section class="band-blue">
+    <div class="inner">
+      <div class="eyebrow">// NOT ONE MACHINE. TWO.</div>
+      <h2>The computer and the drive, both alive.</h2>
+      <p class="lead">Most emulators fake the disk drive. They catch the load and hand back the bytes. This one doesn't. The <span class="hl">1541 is a whole computer of its own</span>, and here it runs as one, talking to the 64 over the same serial line, one bit at a time.</p>
+
+      <div class="machines">
+        <div class="machine">
+          <div class="mname">THE 64</div>
+          <div class="mdesc">The processor, the video chip, the sound chip, two timer chips. The machine you sat in front of.</div>
+          <div class="mchip">CPU &middot; VIDEO &middot; SOUND &middot; TIMERS</div>
+        </div>
+        <div class="iec">
+          <span class="wire">&larr;&rarr;</span>
+          SERIAL<br>BUS
+        </div>
+        <div class="machine">
+          <div class="mname">THE 1541</div>
+          <div class="mdesc">Its own processor and its own memory, reading the disk surface the way the real drive did, head and all.</div>
+          <div class="mchip">CPU &middot; MEMORY &middot; DISK HEAD</div>
+        </div>
+      </div>
+
+      <p class="lead" style="margin-top:3em;">This is why the fast loaders work. They were clever tricks the drive played on itself, and tricks only work on a drive that is <span class="hl">really there</span>.</p>
+    </div>
+  </section>
+
+  <!-- SECTION 3: features -->
+  <section class="band-black">
+    <div class="inner">
+      <div class="eyebrow">// WHAT MAKES IT REAL</div>
+      <h2>Faithful down to the last heartbeat.</h2>
+      <p class="lead">Anyone can paint a blue screen. Getting a machine to <span class="hl">breathe</span> like the original is a different craft entirely.</p>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#b8c76f"/><rect x="2" y="2" width="9" height="2" fill="#000"/><rect x="2" y="6" width="9" height="1" fill="#000"/><rect x="2" y="9" width="6" height="2" fill="#000"/>
+            </svg>
+          </div>
+          <h3>THE HEART</h3>
+          <p>The processor at the core, rebuilt so precisely that even its old undocumented quirks live on. The ones the games actually leaned on, this one does too.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#70a4b2"/><rect x="1" y="3" width="11" height="7" fill="#000"/><rect x="2" y="4" width="9" height="5" fill="#588d43"/><rect x="3" y="5" width="2" height="2" fill="#b8c76f"/><rect x="8" y="5" width="2" height="2" fill="#b8c76f"/>
+            </svg>
+          </div>
+          <h3>THE EYES</h3>
+          <p>Sprites, raster tricks, the split-second timing that demo artists bent into magic. All of it, pixel for pixel, frame for frame.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#6f3d86"/><rect x="2" y="6" width="2" height="5" fill="#b8c76f"/><rect x="5" y="3" width="2" height="8" fill="#b8c76f"/><rect x="8" y="1" width="2" height="10" fill="#b8c76f"/>
+            </svg>
+          </div>
+          <h3>THE VOICE</h3>
+          <p>That unmistakable sound chip, warm and gritty and alive. The basslines you never forgot, ringing out the way they were meant to.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#706deb"/><rect x="1" y="2" width="11" height="9" fill="#000"/><rect x="2" y="3" width="2" height="7" fill="#b8c76f"/><rect x="5" y="3" width="2" height="7" fill="#70a4b2"/><rect x="8" y="3" width="2" height="7" fill="#9ad284"/>
+            </svg>
+          </div>
+          <h3>THE MEMORY</h3>
+          <p>Sixty-four kilobytes that somehow held whole worlds. Every byte in its right place, every corner exactly where it always was.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#6f4f25"/><rect x="1" y="1" width="11" height="11" fill="#000"/><rect x="2" y="2" width="2" height="2" fill="#959595"/><rect x="5" y="2" width="2" height="2" fill="#959595"/><rect x="8" y="2" width="2" height="2" fill="#959595"/><rect x="2" y="5" width="2" height="2" fill="#959595"/><rect x="5" y="5" width="2" height="2" fill="#b8c76f"/><rect x="8" y="5" width="2" height="2" fill="#959595"/><rect x="2" y="8" width="2" height="2" fill="#959595"/><rect x="5" y="8" width="2" height="2" fill="#959595"/><rect x="8" y="8" width="2" height="2" fill="#959595"/>
+            </svg>
+          </div>
+          <h3>THE HANDS</h3>
+          <p>The keys under your fingers, the joystick in your grip. That instant, physical connection between you and the machine, faithful to the touch.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">
+            <svg width="52" height="52" viewBox="0 0 13 13" shape-rendering="crispEdges">
+              <rect width="13" height="13" fill="#588d43"/><rect x="1" y="1" width="11" height="11" fill="#000"/><rect x="5" y="2" width="3" height="3" fill="#b8c76f"/><rect x="6" y="5" width="1" height="4" fill="#959595"/><rect x="3" y="9" width="7" height="2" fill="#70a4b2"/><rect x="2" y="4" width="2" height="2" fill="#9a6759"/><rect x="9" y="4" width="2" height="2" fill="#9a6759"/>
+            </svg>
+          </div>
+          <h3>THE PORTS</h3>
+          <p>Two control ports, ready for the joystick, the paddles, the light pen. Wired the way the hardware wired them, so every game finds its input right where it expects.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 4: stats -->
+  <section class="band-purple">
+    <div class="inner">
+      <div class="eyebrow">// BUILT WITH CARE</div>
+      <h2>Nothing left out. Nothing faked.</h2>
+      <p class="lead">Every part is here, doing what it always did, the way it always did it. Not <span class="hl">almost</span> right. Right.</p>
+      <div class="stats">
+        <div class="stat"><div class="num">2</div><div class="lbl">THE COMPUTER AND ITS DRIVE</div></div>
+        <div class="stat"><div class="num">64</div><div class="lbl">KILOBYTES, HONORED</div></div>
+        <div class="stat"><div class="num">1982</div><div class="lbl">FAITHFUL TO THE YEAR</div></div>
+        <div class="stat"><div class="num">&#8734;</div><div class="lbl">GAMES &amp; DEMOS AWAIT</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 5: reference hub -->
+  <section class="band-black">
+    <div class="inner">
+      <div class="eyebrow">// KNOW THE MACHINE</div>
+      <h2>Everything, mapped out.</h2>
+      <p class="lead">Three references for the machine underneath, from the instruction set to the keys under your hands.</p>
+      <div class="refs">
+        <a class="ref" href="instructions.html">
+          <div class="rname">INSTRUCTION SET</div>
+          <div class="rdesc">Every processor instruction, what it does, and how it touches the flags. Search it, filter it.</div>
+          <span class="rgo">OPEN &rarr;</span>
+        </a>
+        <a class="ref" href="system-map.html">
+          <div class="rname">SYSTEM MAP</div>
+          <div class="rdesc">The bus, the chips, the memory map, the sockets. The whole machine, laid open.</div>
+          <span class="rgo">OPEN &rarr;</span>
+        </a>
+        <a class="ref" href="drive-map.html">
+          <div class="rname">DRIVE MAP</div>
+          <div class="rdesc">The 1541 as its own computer. Its processor, its two interface chips, the disk surface, and why it was so slow.</div>
+          <span class="rgo">OPEN &rarr;</span>
+        </a>
+        <a class="ref" href="keyboard.html">
+          <div class="rname">KEYBOARD MAP</div>
+          <div class="rdesc">Press a key and watch it light up. Every key, its matrix position, and the poke behind it.</div>
+          <span class="rgo">OPEN &rarr;</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECTION 6: CTA -->
+  <section class="band-blue">
+    <div class="inner cta-wrap">
+      <div class="eyebrow">// THE BLUE SCREEN IS WAITING</div>
+      <h2>Turn it on. Come home.</h2>
+      <p class="lead">Boot straight into that famous blue. No desktop, no clutter, no decades in between. Just you and the machine, the way it always should have been.</p>
+      <a href="https://github.com/ChronoCoders/C64" class="btn">VIEW THE SOURCE</a>
+      <a href="#" class="btn ghost" onclick="document.querySelector('.refs').scrollIntoView({behavior:'smooth'});return false;">EXPLORE THE MACHINE</a>
+    </div>
+  </section>
+
+  <footer>
+    <div class="ready-tiny">READY.</div>
+    A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; BUILT BY HAND, FOR THE LOVE OF THE CRAFT<br>
+    NOT AFFILIATED WITH COMMODORE.
+  </footer>
+
+  <!-- SID SOUND -->
+  <div id="sid-ctl">
+    <button id="sid-btn" type="button" aria-pressed="false">&#9834; SID: OFF</button>
+    <div id="sid-note">Three voices, four waveforms, one filter. An original tune on a model of the 6581.</div>
+  </div>
+
+<script>
+  // Typewriter on the READY prompt
+  const typed = document.getElementById("typed");
+  const cmd = "LOAD \"*\",8,1";
+  let i = 0;
+  function typeNext() {
+    if (i <= cmd.length) { typed.textContent = cmd.slice(0, i); i++; setTimeout(typeNext, 130); }
+  }
+  setTimeout(typeNext, 900);
+
+  // Build pixel sprites
+  const SP = 3;
+  const palette = {
+    "k":"#000000","w":"#ffffff","r":"#68372b","c":"#70a4b2","p":"#6f3d86","g":"#588d43",
+    "b":"#352879","y":"#b8c76f","o":"#6f4f25","G":"#9ad284","L":"#706deb",".":null
+  };
+  const sprites = [
+    ["....yyyy....","..yyLLLLyy..",".yLLLLLLLLy.",".yLLwwLLLLy.","yLLwwLLLLLLy","yLLLLLLLLLLy","yLLLLLLLLLLy","yLLLLLLLLLLy",".yLLLLLLLLy.",".yLLLLLLLLy.","..yyLLLLyy..","....yyyy...."],
+    ["..g......g..","...g....g...","..gggggggg..",".gg.gggg.gg.","gggggggggggg","g.gggggggg.g","g.g......g.g","...gg..gg...","............","............","............","............"],
+    [".rr....rr...","rrrr..rrrr..","rrrrrrrrrrr.","rrrrrrrrrrr.","rrrrrrrrrrr.",".rrrrrrrrr..","..rrrrrrr...","...rrrrr....","....rrr.....",".....r......","............","............"],
+    ["..cccccccc..",".cccccccccc.","ccckkcckkccc","ccckkcckkccc","cccccccccccc","cckcccccckcc","cckcccccckcc","ccckkkkkkccc",".cccccccccc.","..cccccccc..","............","............"],
+    [".....w......","....www.....","....wcw.....","...wcccw....","...wcccw....","..wccccw....","..wrrrrw....",".wrrrrrrw...",".w.rww.w....","...r..r.....","..r....r....","............"],
+    ["......y.....","......y.....","...y..y..y..","....y.y.y...","yyyyyyyyyyyy",".yyyyyyyyyy.","..yyyyyyyy..","...yyyyyy...","..yy.yy.yy..",".y..y..y..y.","............","............"],
+    ["....GGGG....","...G....G...","...G....G...","....GGGG....","......G.....","......G.....","......GG....","......G.....","......GG....","......G.....","............","............"],
+    ["...rrrrrr...","..rrrrrrrr..",".rwrrrwrrrr.","rrrrrrrrrrrr","rrwrrrrrwrrr",".rrrrrrrrrr.","..rrGGGGrr..","....GGGG....","....GGGG....","....GGGG....","...GGGGGG...","............"]
+  ];
+  function drawSprite(map) {
+    const w = map[0].length, h = map.length;
+    const cv = document.createElement("canvas");
+    cv.width = w*SP; cv.height = h*SP; cv.className = "sprite";
+    cv.style.width = (w*SP*1.4)+"px"; cv.style.height = (h*SP*1.4)+"px";
+    const ctx = cv.getContext("2d");
+    for (let y=0;y<h;y++) for (let x=0;x<w;x++){ const col = palette[map[y][x]]; if (col){ ctx.fillStyle = col; ctx.fillRect(x*SP,y*SP,SP,SP); } }
+    return cv;
+  }
+  const strip = document.getElementById("spriteStrip");
+  sprites.forEach(m => strip.appendChild(drawSprite(m)));
+</script>
+
+<script>
+/*
+  A model of the MOS 6581, built the way the chip is built: three voices,
+  each a 24 bit phase accumulator feeding one of four waveform generators,
+  each with its own ADSR envelope, and one shared state variable filter.
+  The play routine runs at 50 Hz, once per raster frame. The tune is original.
+*/
+(function () {
+  var btn = document.getElementById("sid-btn");
+  var OFF = "\u266A SID: OFF", ON = "\u266A SID: ON";
+  var ctx = null, node = null, playing = false;
+  var CHORDS = [[57,60,64],[53,57,60],[60,64,67],[55,59,62],[57,60,64],[53,57,60],[55,59,62],[52,56,59]];
+  var ROOTS = [45,41,48,43,45,41,43,40];
+  var LEAD = [69,0,72,0,76,0,74,0,72,0,69,0,65,0,69,0,76,0,79,0,76,0,72,0,74,0,71,0,67,0,71,0,69,0,72,0,76,0,81,0,79,0,77,0,76,0,72,0,74,0,76,0,74,0,71,0,76,0,0,0,71,0,0,0];
+  var EIGHTH=12, BEAT=24, BAR=96, TOTAL=BAR*8;
+  function note(n){ return 440*Math.pow(2,(n-69)/12); }
+  function makeVoice(){ return { acc:0, inc:0, pw:2048, wave:1, env:0, gate:false, atk:0.004, dec:0.10, sus:0.55, rel:0.30, lfsr:0x7ffff8, lastB19:0, routed:false, level:1 }; }
+  function makeSid(sr){
+    var s = { sr:sr, v:[makeVoice(),makeVoice(),makeVoice()], low:0, band:0, lfo:0, pwPhase:0, tick:0, tickAcc:0, spt:sr/50, arpIdx:0, hat:0, master:0.24 };
+    s.v[0].wave=2; s.v[0].routed=true; s.v[0].level=0.80; s.v[0].atk=0.003; s.v[0].dec=0.09; s.v[0].sus=0.45; s.v[0].rel=0.22;
+    s.v[1].wave=1; s.v[1].routed=false; s.v[1].level=0.34; s.v[1].atk=0.001; s.v[1].dec=0.05; s.v[1].sus=0.70; s.v[1].rel=0.05;
+    s.v[2].wave=0; s.v[2].routed=true; s.v[2].level=0.95; s.v[2].atk=0.002; s.v[2].dec=0.18; s.v[2].sus=0.50; s.v[2].rel=0.20;
+    return s;
+  }
+  function setNote(s,v,midi){ v.inc = note(midi)*16777216/s.sr; }
+  function play(s){
+    var t=s.tick, bar=Math.floor(t/BAR)%8, inBar=t%BAR;
+    if (inBar%EIGHTH===0){ var n=LEAD[bar*8+Math.floor(inBar/EIGHTH)]; if(n){ setNote(s,s.v[0],n); s.v[0].gate=true; } }
+    if (inBar%EIGHTH===9) s.v[0].gate=false;
+    if (inBar%BEAT===0){ setNote(s,s.v[2],ROOTS[bar]); s.v[2].gate=true; }
+    if (inBar%BEAT===18) s.v[2].gate=false;
+    if (inBar%BEAT===0){ s.hat=3; s.v[1].wave=3; s.v[1].inc=6000*16777216/s.sr; s.v[1].gate=true; }
+    else if (s.hat>0){ s.hat--; if(s.hat===0) s.v[1].wave=1; }
+    if (s.hat===0 && t%2===0){ var chord=CHORDS[bar]; setNote(s,s.v[1],chord[s.arpIdx%3]); s.arpIdx++; s.v[1].gate=true; }
+    s.tick=(s.tick+1)%TOTAL;
+  }
+  function voiceSample(s,v){
+    v.acc+=v.inc; if(v.acc>=16777216) v.acc-=16777216;
+    var a=v.acc|0, out;
+    if(v.wave===0){ var msb=(a&0x800000)?0xFFF:0; out=((a>>>11)&0xFFF)^msb; }
+    else if(v.wave===1){ out=(a>>>12)&0xFFF; }
+    else if(v.wave===2){ out=((a>>>12)&0xFFF)>=v.pw?0xFFF:0; }
+    else { var b19=(a>>>19)&1; if(b19&&!v.lastB19){ var fb=(((v.lfsr>>>22)^(v.lfsr>>>17))&1); v.lfsr=((v.lfsr<<1)|fb)&0x7FFFFF; } v.lastB19=b19;
+      var l=v.lfsr; var n8=(((l>>>22)&1)<<7)|(((l>>>20)&1)<<6)|(((l>>>16)&1)<<5)|(((l>>>13)&1)<<4)|(((l>>>11)&1)<<3)|(((l>>>7)&1)<<2)|(((l>>>4)&1)<<1)|((l>>>2)&1); out=n8<<4; }
+    if(v.gate){ if(v.env<1){ v.env+=1/(v.atk*s.sr); if(v.env>1) v.env=1; } else { v.env+=(v.sus-v.env)*(1/(v.dec*s.sr)); } }
+    else { v.env+=(0-v.env)*(1/(v.rel*s.sr)); }
+    return ((out-2048)/2048)*v.env*v.level;
+  }
+  function render(s,ch,n){
+    for(var i=0;i<n;i++){
+      s.tickAcc++; if(s.tickAcc>=s.spt){ s.tickAcc-=s.spt; play(s); }
+      s.pwPhase+=0.35/s.sr; s.v[0].pw=1300+Math.floor(900*Math.sin(s.pwPhase*2*Math.PI));
+      var s0=voiceSample(s,s.v[0]), s1=voiceSample(s,s.v[1]), s2=voiceSample(s,s.v[2]);
+      var routed=s0+s2;
+      s.lfo+=0.06/s.sr; var cut=480+1750*(0.5+0.5*Math.sin(s.lfo*2*Math.PI)); var f=2*Math.sin(Math.PI*cut/s.sr); if(f>0.75) f=0.75;
+      s.low+=f*s.band; var high=routed-s.low-0.72*s.band; s.band+=f*high;
+      var out=(s.low*0.95+s1*0.55)*s.master; if(out>1) out=1; else if(out<-1) out=-1;
+      ch[i]=out;
+    }
+  }
+  function start(){ var AC=window.AudioContext||window.webkitAudioContext; ctx=new AC(); var sid=makeSid(ctx.sampleRate);
+    node=ctx.createScriptProcessor(2048,0,2);
+    node.onaudioprocess=function(e){ var left=e.outputBuffer.getChannelData(0), right=e.outputBuffer.getChannelData(1); render(sid,left,left.length); right.set(left); };
+    node.connect(ctx.destination);
+  }
+  btn.addEventListener("click", function(){
+    try {
+      if(!ctx){ start(); playing=true; }
+      else if(playing){ ctx.suspend(); playing=false; }
+      else { ctx.resume(); playing=true; }
+      btn.textContent = playing?ON:OFF; btn.setAttribute("aria-pressed", String(playing));
+    } catch(err){ btn.disabled=true; btn.textContent="\u266A SID: UNAVAILABLE"; if(window.console) console.error(err); }
+  });
+})();
+</script>
+
+</body>
+</html>

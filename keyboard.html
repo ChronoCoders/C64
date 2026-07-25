@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commodore 64 · Keyboard Map</title>
+<style>
+  @font-face {
+    font-family: 'C64';
+    src: url('https://fonts.cdnfonts.com/s/28850/PetMe64.woff') format('woff');
+    font-display: swap;
+  }
+  :root {
+    --c64-black:   #000000;
+    --c64-white:   #FFFFFF;
+    --c64-red:     #68372B;
+    --c64-cyan:    #70A4B2;
+    --c64-purple:  #6F3D86;
+    --c64-green:   #588D43;
+    --c64-blue:    #352879;
+    --c64-yellow:  #B8C76F;
+    --c64-orange:  #6F4F25;
+    --c64-brown:   #433900;
+    --c64-lred:    #9A6759;
+    --c64-dgrey:   #444444;
+    --c64-grey:    #6C6C6C;
+    --c64-lgreen:  #9AD284;
+    --c64-lblue:   #6C5EB5;
+    --c64-lgrey:   #959595;
+    --border:      #6C5EB5;
+    --screen:      #352879;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: var(--c64-black);
+    min-height: 100%;
+    font-family: 'C64', 'Courier New', monospace;
+    -webkit-font-smoothing: none;
+    image-rendering: pixelated;
+    color: var(--c64-white);
+  }
+  #stage {
+    min-height: 100vh;
+    background: var(--c64-black);
+    padding: 16px 16px 24px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+  #screen {
+    position: relative;
+    width: 100%;
+    max-width: 1080px;
+    background: var(--screen);
+    box-shadow: 0 0 0 3px var(--border);
+    padding: 20px 22px 26px;
+    overflow: hidden;
+  }
+  #scanlines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0.10) 0px,
+      rgba(0,0,0,0.10) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+
+  /* ---- header ---- */
+  .boot {
+    color: var(--c64-lblue);
+    font-size: clamp(8px, 1.1vw, 11px);
+    line-height: 1.5;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .boot .bright { color: var(--c64-white); }
+  h1 {
+    font-size: clamp(16px, 2.8vw, 26px);
+    letter-spacing: 3px;
+    color: var(--c64-yellow);
+    text-shadow: 2px 2px 0 var(--c64-red), 4px 4px 0 var(--c64-black);
+    margin-bottom: 5px;
+  }
+  h1 .six4 { color: var(--c64-lgreen); }
+  .sub {
+    font-size: clamp(8px, 1.2vw, 11px);
+    color: var(--c64-cyan);
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+
+  /* ---- readout ---- */
+  #readout {
+    border: 2px solid var(--c64-lgreen);
+    background: var(--c64-black);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: clamp(9px, 1.2vw, 12px);
+    line-height: 1.6;
+    letter-spacing: 1px;
+    min-height: 62px;
+  }
+  #readout .idle { color: var(--c64-grey); }
+  #readout .k { color: var(--c64-yellow); }
+  #readout .v { color: var(--c64-white); }
+  #readout .lbl { color: var(--c64-lgreen); }
+  #readout .warn { color: var(--c64-lred); }
+  #readout .hexline { color: var(--c64-cyan); }
+
+  /* ---- keyboard ---- */
+  #kb {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .krow {
+    display: flex;
+    gap: 5px;
+    align-items: stretch;
+  }
+  .key {
+    position: relative;
+    background: var(--c64-dgrey);
+    border: none;
+    border-top: 2px solid var(--c64-grey);
+    border-left: 2px solid var(--c64-grey);
+    border-right: 2px solid var(--c64-black);
+    border-bottom: 2px solid var(--c64-black);
+    color: var(--c64-white);
+    font-family: inherit;
+    font-size: clamp(7px, 0.95vw, 11px);
+    letter-spacing: 0.5px;
+    padding: 8px 2px 4px;
+    min-height: 40px;
+    flex: 1 1 0;
+    min-width: 0;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    text-align: center;
+    line-height: 1.1;
+    overflow: hidden;
+  }
+  .key:hover { background: var(--c64-grey); }
+  .key:focus-visible {
+    outline: 2px solid var(--c64-yellow);
+    outline-offset: 1px;
+  }
+  .key .cap { color: var(--c64-white); }
+  .key .pc {
+    font-size: clamp(6px, 0.75vw, 9px);
+    color: var(--c64-lgreen);
+    letter-spacing: 0;
+  }
+  .key .mx {
+    font-size: clamp(6px, 0.75vw, 9px);
+    color: var(--c64-cyan);
+    letter-spacing: 0;
+    display: none;
+  }
+  body.showmatrix .key .pc { display: none; }
+  body.showmatrix .key .mx { display: block; }
+
+  /* lit state */
+  .key.lit {
+    background: var(--c64-yellow);
+    color: var(--c64-black);
+    border-top-color: var(--c64-white);
+    border-left-color: var(--c64-white);
+    border-right-color: var(--c64-brown);
+    border-bottom-color: var(--c64-brown);
+  }
+  .key.lit .cap { color: var(--c64-black); }
+  .key.lit .pc, .key.lit .mx { color: var(--c64-brown); }
+
+  /* keys with no matrix position (RESTORE, SHIFT LOCK) */
+  .key.nomatrix { background: var(--c64-red); }
+  .key.nomatrix:hover { background: var(--c64-lred); }
+  .key.nomatrix.lit { background: var(--c64-lred); color: var(--c64-white); }
+  .key.nomatrix.lit .cap { color: var(--c64-white); }
+
+  /* width classes */
+  .w15 { flex-grow: 1.5; }
+  .w20 { flex-grow: 2; }
+  .w25 { flex-grow: 2.5; }
+  .w90 { flex-grow: 9; }
+  .fblock { flex-grow: 1; }
+
+  #fkeys {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-left: 8px;
+    width: 84px;
+    flex: none;
+  }
+  #kbwrap { display: flex; align-items: stretch; }
+  #kbmain { flex: 1; min-width: 0; }
+
+  /* space bar sits under the main block only, clear of the F column */
+  #spacerow {
+    margin-top: 5px;
+    padding-right: 92px;
+  }
+
+  /* ---- controls + notes ---- */
+  #controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 18px 0 0;
+  }
+  .btn {
+    background: var(--c64-black);
+    color: var(--c64-lgreen);
+    border: 2px solid var(--c64-lgreen);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 7px 11px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  .btn:hover { background: var(--c64-lgreen); color: var(--c64-black); }
+  .btn.on { background: var(--c64-lgreen); color: var(--c64-black); }
+
+  @media (max-width: 760px) {
+    #kbwrap { flex-direction: column; }
+    #fkeys { flex-direction: row; width: auto; margin: 5px 0 0; }
+    #spacerow { padding-right: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  .topnav {
+    border-bottom: 3px solid var(--c64-lblue); background: var(--c64-black);
+    padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center;
+    font-family: 'C64','Courier New',monospace;
+    font-size: clamp(9px,1.3vw,12px); letter-spacing: 1px;
+  }
+  .topnav a { color: var(--c64-lblue); text-decoration: none; }
+  .topnav a:hover { color: var(--c64-yellow); }
+  .topnav a.here { color: var(--c64-yellow); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="index.html">HOME</a>
+  <a href="instructions.html">INSTRUCTION SET</a>
+  <a href="system-map.html">SYSTEM MAP</a>
+  <a href="drive-map.html">DRIVE MAP</a>
+  <a href="keyboard.html" class="here">KEYBOARD MAP</a>
+</nav>
+<div id="stage">
+  <div id="screen">
+    <div id="scanlines"></div>
+
+    <div class="boot">
+      **** COMMODORE 64 BASIC V2 ****<br>
+      READY.<br>
+      LOAD"<span class="bright">KEYBOARD.MAP</span>",8,1<span class="bright">&#9608;</span>
+    </div>
+
+    <h1>KEYBOARD MAP<span class="six4">64</span></h1>
+    <div class="sub">PRESS A KEY ON YOUR PC. THE C64 KEY LIGHTS UP.</div>
+
+    <div id="readout">
+      <div class="idle">WAITING FOR KEYPRESS ...</div>
+    </div>
+
+    <div id="kbwrap">
+      <div id="kbmain"><div id="kb"></div></div>
+      <div id="fkeys"></div>
+    </div>
+    <div id="spacerow"></div>
+
+    <div id="controls">
+      <button class="btn" id="btnMatrix">SHOW MATRIX</button>
+      <button class="btn" id="btnDump">DUMP TABLE</button>
+    </div>
+
+  </div>
+</div>
+
+<footer style="border-top:3px solid var(--c64-lblue); padding:26px 20px; text-align:center; color:var(--c64-grey); font-family:'C64','Courier New',monospace; font-size:clamp(9px,1.3vw,12px); letter-spacing:1px; background:var(--c64-black);">
+  A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; NOT AFFILIATED WITH COMMODORE
+</footer>
+
+<script>
+/* ---------------------------------------------------------------
+   C64 KEYBOARD MATRIX
+   col = bit pulled low in $DC00   |   row = bit read low in $DC01
+   RESTORE and SHIFT LOCK have no matrix position (col/row = null).
+   --------------------------------------------------------------- */
+
+const K = (cap, pc, col, row, cls) => ({ cap, pc, col, row, cls: cls || '' });
+
+const ROWS = [
+  [ // top row
+    K('&larr;',       'Backquote',   7, 1),
+    K('1',            'Digit1',      7, 0),
+    K('2',            'Digit2',      7, 3),
+    K('3',            'Digit3',      1, 0),
+    K('4',            'Digit4',      1, 3),
+    K('5',            'Digit5',      2, 0),
+    K('6',            'Digit6',      2, 3),
+    K('7',            'Digit7',      3, 0),
+    K('8',            'Digit8',      3, 3),
+    K('9',            'Digit9',      4, 0),
+    K('0',            'Digit0',      4, 3),
+    K('+',            'Minus',       5, 0),
+    K('-',            'Equal',       5, 3),
+    K('&pound;',      'Backslash',   6, 0),
+    K('CLR<br>HOME',  'Home',        6, 3),
+    K('INST<br>DEL',  'Backspace',   0, 0, 'w15')
+  ],
+  [ // qwerty row
+    K('CTRL',    'Tab',           7, 2, 'w15'),
+    K('Q',       'KeyQ',          7, 6),
+    K('W',       'KeyW',          1, 1),
+    K('E',       'KeyE',          1, 6),
+    K('R',       'KeyR',          2, 1),
+    K('T',       'KeyT',          2, 6),
+    K('Y',       'KeyY',          3, 1),
+    K('U',       'KeyU',          3, 6),
+    K('I',       'KeyI',          4, 1),
+    K('O',       'KeyO',          4, 6),
+    K('P',       'KeyP',          5, 1),
+    K('@',       'BracketLeft',   5, 6),
+    K('*',       'BracketRight',  6, 1),
+    K('&uarr;',  'Delete',        6, 6),
+    K('RESTORE', 'PageUp',     null, null, 'w15 nomatrix')
+  ],
+  [ // home row
+    K('RUN<br>STOP',   'Escape',      7, 7, 'w15'),
+    K('SHIFT<br>LOCK', 'CapsLock', null, null, 'w15 nomatrix'),
+    K('A',       'KeyA',        1, 2),
+    K('S',       'KeyS',        1, 5),
+    K('D',       'KeyD',        2, 2),
+    K('F',       'KeyF',        2, 5),
+    K('G',       'KeyG',        3, 2),
+    K('H',       'KeyH',        3, 5),
+    K('J',       'KeyJ',        4, 2),
+    K('K',       'KeyK',        4, 5),
+    K('L',       'KeyL',        5, 2),
+    K(':',       'Semicolon',   5, 5),
+    K(';',       'Quote',       6, 2),
+    K('=',       'End',         6, 5),
+    K('RETURN',  'Enter',       0, 1, 'w20')
+  ],
+  [ // bottom row
+    K('C=',           'ControlLeft', 7, 5, 'w15'),
+    K('SHIFT',        'ShiftLeft',   1, 7, 'w20'),
+    K('Z',            'KeyZ',        1, 4),
+    K('X',            'KeyX',        2, 7),
+    K('C',            'KeyC',        2, 4),
+    K('V',            'KeyV',        3, 7),
+    K('B',            'KeyB',        3, 4),
+    K('N',            'KeyN',        4, 7),
+    K('M',            'KeyM',        4, 4),
+    K(',',            'Comma',       5, 7),
+    K('.',            'Period',      5, 4),
+    K('/',            'Slash',       6, 7),
+    K('SHIFT',        'ShiftRight',  6, 4, 'w20'),
+    K('CRSR<br>&updownarrow;', 'ArrowDown',  0, 7),
+    K('CRSR<br>&leftrightarrow;', 'ArrowRight', 0, 2)
+  ],
+  [ // space
+    K('SPACE', 'Space', 7, 4, 'w90')
+  ]
+];
+
+const FKEYS = [
+  K('F1', 'F1', 0, 4, 'fblock'),
+  K('F3', 'F3', 0, 5, 'fblock'),
+  K('F5', 'F5', 0, 6, 'fblock'),
+  K('F7', 'F7', 0, 3, 'fblock')
+];
+
+/* shifted-only keys: PC key -> the physical C64 key it maps to, with SHIFT */
+const SHIFTED = {
+  'ArrowUp':   { pc: 'ArrowDown',   note: 'SHIFT + CRSR DOWN' },
+  'ArrowLeft': { pc: 'ArrowRight',  note: 'SHIFT + CRSR RIGHT' },
+  'F2':        { pc: 'F1',          note: 'SHIFT + F1' },
+  'F4':        { pc: 'F3',          note: 'SHIFT + F3' },
+  'F6':        { pc: 'F5',          note: 'SHIFT + F5' },
+  'F8':        { pc: 'F7',          note: 'SHIFT + F7' }
+};
+
+/* ---------------- build the keyboard ---------------- */
+const kb = document.getElementById('kb');
+const spacerow = document.getElementById('spacerow');
+const fk = document.getElementById('fkeys');
+const byPC = new Map();
+const all = [];
+
+function makeKey(k) {
+  const el = document.createElement('button');
+  el.className = 'key ' + k.cls;
+  el.type = 'button';
+
+  const cap = document.createElement('span');
+  cap.className = 'cap';
+  cap.innerHTML = k.cap;
+
+  const pc = document.createElement('span');
+  pc.className = 'pc';
+  pc.textContent = shortPC(k.pc);
+
+  const mx = document.createElement('span');
+  mx.className = 'mx';
+  mx.textContent = k.col === null ? 'NMI' : k.col + ',' + k.row;
+
+  el.append(cap, pc, mx);
+  el.addEventListener('click', () => show(k));
+
+  k.el = el;
+  byPC.set(k.pc, k);
+  all.push(k);
+  return el;
+}
+
+function shortPC(code) {
+  return code
+    .replace('Digit', '')
+    .replace('Key', '')
+    .replace('Arrow', '')
+    .replace('Bracket', '')
+    .replace('Control', 'CTRL')
+    .replace('Shift', 'SHFT')
+    .toUpperCase();
+}
+
+function buildRow(row, host) {
+  const div = document.createElement('div');
+  div.className = 'krow';
+  for (const k of row) div.appendChild(makeKey(k));
+  host.appendChild(div);
+}
+
+for (const row of ROWS.slice(0, -1)) buildRow(row, kb);
+buildRow(ROWS[ROWS.length - 1], spacerow);
+for (const k of FKEYS) fk.appendChild(makeKey(k));
+
+/* ---------------- readout ---------------- */
+const readout = document.getElementById('readout');
+
+function hex(n) { return '$' + n.toString(16).toUpperCase().padStart(2, '0'); }
+function bin(n) { return '%' + n.toString(2).padStart(8, '0'); }
+
+function show(k, extraNote) {
+  const lines = [];
+  lines.push(`<span class="lbl">C64 KEY</span> <span class="k">${k.cap.replace('<br>', ' ')}</span>`);
+  lines.push(`<span class="lbl">PC KEY </span> <span class="v">${k.pc}</span>`);
+
+  if (k.col === null) {
+    lines.push(`<span class="warn">NOT IN THE KEYBOARD MATRIX.</span>`);
+    lines.push(k.pc === 'PageUp'
+      ? `<span class="warn">RESTORE PULLS THE CPU NMI LINE. WIRE IT TO NMI, NOT TO $DC01.</span>`
+      : `<span class="warn">SHIFT LOCK LATCHES LEFT SHIFT (COL 1, ROW 7). NO SEPARATE LINE.</span>`);
+  } else {
+    const sel = 0xFF ^ (1 << k.col);
+    const mask = 0xFF ^ (1 << k.row);
+    lines.push(`<span class="lbl">MATRIX </span> <span class="v">COL ${k.col}  ROW ${k.row}</span>`);
+    lines.push(`<span class="hexline">POKE $DC00, ${hex(sel)}   (${bin(sel)})</span>`);
+    lines.push(`<span class="hexline">PEEK $DC01 -&gt; BIT ${k.row} LOW, ${hex(mask)} IF ALONE</span>`);
+  }
+  if (extraNote) lines.push(`<span class="warn">${extraNote}</span>`);
+
+  readout.innerHTML = lines.join('<br>');
+}
+
+/* ---------------- live PC key capture ---------------- */
+const PREVENT = new Set([
+  'Tab', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8',
+  'Backspace', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Backquote', 'Quote', 'Slash'
+]);
+
+function lightUp(code) {
+  let k = byPC.get(code);
+  let note = null;
+
+  if (!k && SHIFTED[code]) {
+    k = byPC.get(SHIFTED[code].pc);
+    note = 'THE C64 HAS NO SEPARATE KEY. THIS IS ' + SHIFTED[code].note + '.';
+    const ls = byPC.get('ShiftLeft');
+    if (ls) ls.el.classList.add('lit');
+  }
+  if (!k) return false;
+
+  k.el.classList.add('lit');
+  show(k, note);
+  return true;
+}
+
+window.addEventListener('keydown', (e) => {
+  if (PREVENT.has(e.code)) e.preventDefault();
+  const hit = lightUp(e.code);
+  if (!hit) {
+    readout.innerHTML =
+      `<span class="lbl">PC KEY </span> <span class="v">${e.code}</span><br>` +
+      `<span class="warn">NO C64 EQUIVALENT IN THIS MAPPING.</span>`;
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  for (const k of all) k.el.classList.remove('lit');
+});
+
+window.addEventListener('blur', () => {
+  for (const k of all) k.el.classList.remove('lit');
+});
+
+/* ---------------- controls ---------------- */
+const btnMatrix = document.getElementById('btnMatrix');
+btnMatrix.addEventListener('click', () => {
+  document.body.classList.toggle('showmatrix');
+  const on = document.body.classList.contains('showmatrix');
+  btnMatrix.classList.toggle('on', on);
+  btnMatrix.textContent = on ? 'SHOW PC KEYS' : 'SHOW MATRIX';
+});
+
+document.getElementById('btnDump').addEventListener('click', () => {
+  const rows = all
+    .filter(k => k.col !== null)
+    .sort((a, b) => a.col - b.col || a.row - b.row)
+    .map(k => {
+      const cap = k.cap.replace('<br>', '/').replace('&larr;', 'ARROWLEFT')
+                       .replace('&uarr;', 'ARROWUP').replace('&pound;', 'POUND')
+                       .replace('&updownarrow;', 'UPDOWN')
+                       .replace('&leftrightarrow;', 'LEFTRIGHT');
+      return `    (${k.col}, ${k.row}) => "${k.pc}",   // ${cap}`;
+    });
+
+  const src =
+`// C64 keyboard matrix -> PC KeyboardEvent.code
+// col = bit pulled low in $DC00, row = bit read low in $DC01
+// RESTORE  -> PageUp     (NMI line, not in matrix)
+// SHIFTLOCK-> CapsLock   (latches col 1 row 7)
+// ArrowUp   = SHIFT + (0,7)   ArrowLeft = SHIFT + (0,2)
+// F2 F4 F6 F8 = SHIFT + F1 F3 F5 F7
+[
+${rows.join('\n')}
+]`;
+
+  const w = window.open('', '_blank');
+  if (w) {
+    w.document.write('<pre style="font:12px monospace;padding:16px;">' +
+      src.replace(/</g, '&lt;') + '</pre>');
+    w.document.title = 'C64 keymap table';
+  } else {
+    readout.innerHTML = '<span class="warn">POPUP BLOCKED. ALLOW POPUPS TO DUMP THE TABLE.</span>';
+  }
+});
+</script>
+</body>
+</html>

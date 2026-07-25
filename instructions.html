@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commodore 64 &middot; Instruction Set</title>
+<style>
+  :root {
+    --black:#000000; --white:#ffffff; --red:#68372b; --cyan:#70a4b2;
+    --purple:#6f3d86; --green:#588d43; --blue:#352879; --yellow:#b8c76f;
+    --orange:#6f4f25; --brown:#433900; --lred:#9a6759; --dgrey:#444444;
+    --grey:#6c6c6c; --lgreen:#9ad284; --lblue:#6c5eb5; --lgrey:#959595;
+
+    /* group tints, kept within the VIC palette family */
+    --g-load:#b8c76f; --g-trans:#9ad284; --g-stack:#6c5eb5; --g-alu:#9a6759;
+    --g-rmw:#6f3d86; --g-cmp:#6f4f25; --g-branch:#588d43; --g-jump:#70a4b2;
+    --g-flag:#70a4b2; --g-ctrl:#959595;
+  }
+  @font-face {
+    font-family:"C64";
+    src:url('https://fonts.cdnfonts.com/s/28850/PetMe64.woff') format('woff'), local("C64 Pro Mono");
+    font-display:swap;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    background:var(--black); color:var(--white);
+    font-family:"C64","Courier New",monospace;
+    -webkit-font-smoothing:none; image-rendering:pixelated;
+    line-height:1.6; padding:0 0 80px;
+  }
+  body::after {
+    content:""; position:fixed; inset:0; pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px);
+    z-index:9999; mix-blend-mode:multiply;
+  }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 20px; }
+
+  /* nav */
+  nav {
+    border-bottom:3px solid var(--lblue); background:var(--black);
+    padding:12px 20px; display:flex; flex-wrap:wrap; gap:6px 18px; justify-content:center;
+    font-size:clamp(9px,1.3vw,12px); letter-spacing:1px;
+  }
+  nav a { color:var(--lblue); text-decoration:none; }
+  nav a:hover { color:var(--yellow); }
+  nav a.here { color:var(--yellow); }
+
+  /* header */
+  header { padding:34px 0 8px; }
+  .boot { color:var(--lblue); font-size:clamp(9px,1.3vw,12px); line-height:1.7; letter-spacing:1px; margin-bottom:18px; }
+  .boot .bright { color:var(--white); }
+  h1 {
+    font-size:clamp(20px,3.6vw,34px); letter-spacing:2px; color:var(--yellow);
+    text-shadow:2px 2px 0 var(--red), 4px 4px 0 var(--black); margin-bottom:12px;
+  }
+  h1 span { color:var(--lgreen); }
+  .sub { color:var(--cyan); font-size:clamp(9px,1.4vw,13px); letter-spacing:1px; max-width:70ch; line-height:1.7; }
+  .sub b { color:var(--white); }
+
+  /* controls */
+  .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:26px 0 20px; }
+  #search {
+    flex:1 1 240px; min-width:200px; background:var(--black);
+    border:2px solid var(--lgreen); color:var(--white);
+    font-family:inherit; font-size:clamp(9px,1.3vw,12px); letter-spacing:1px;
+    padding:11px 13px; outline:none;
+  }
+  #search:focus { border-color:var(--yellow); }
+  #search::placeholder { color:var(--grey); }
+  .filters { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip {
+    font-family:inherit; font-size:clamp(8px,1.2vw,11px); letter-spacing:1px;
+    color:var(--lblue); background:var(--black); border:2px solid var(--lblue);
+    padding:8px 11px; cursor:pointer; text-transform:uppercase; user-select:none;
+  }
+  .chip:hover { color:var(--white); border-color:var(--white); }
+  .chip.active { color:var(--black); background:var(--yellow); border-color:var(--yellow); }
+
+  .count { color:var(--grey); font-size:clamp(9px,1.3vw,12px); letter-spacing:1px; margin-bottom:16px; }
+
+  /* grid */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px,1fr)); gap:14px; }
+  .card {
+    background:var(--black); border:3px solid var(--grp-color, var(--lblue));
+    padding:16px 16px 14px; position:relative;
+  }
+  .card-top { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:8px; }
+  .mnem { font-size:clamp(16px,2.4vw,22px); color:var(--grp-color, var(--yellow)); letter-spacing:2px; }
+  .grp-tag {
+    font-size:clamp(7px,1vw,9px); letter-spacing:1px; color:var(--black);
+    background:var(--grp-color, var(--lblue)); padding:3px 6px; text-transform:uppercase; white-space:nowrap;
+  }
+  .name { font-size:clamp(9px,1.3vw,12px); color:var(--white); letter-spacing:1px; margin-bottom:6px; }
+  .desc { font-size:clamp(8px,1.2vw,11px); color:var(--lgrey); line-height:1.7; margin-bottom:12px; }
+
+  .flags { display:flex; gap:4px; }
+  .flag {
+    width:24px; height:24px; display:flex; align-items:center; justify-content:center;
+    font-size:clamp(8px,1.1vw,11px); border:2px solid var(--dgrey); color:var(--grey);
+  }
+  .flag.on { border-color:var(--yellow); background:var(--yellow); color:var(--black); }
+
+  .empty { color:var(--lred); font-size:clamp(10px,1.5vw,14px); letter-spacing:1px; padding:30px 0; }
+
+  footer {
+    border-top:3px solid var(--lblue); margin-top:40px; padding:26px 20px;
+    text-align:center; color:var(--grey); font-size:clamp(9px,1.3vw,12px); letter-spacing:1px;
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation:none!important; transition:none!important; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html">HOME</a>
+  <a href="instructions.html" class="here">INSTRUCTION SET</a>
+  <a href="system-map.html">SYSTEM MAP</a>
+  <a href="drive-map.html">DRIVE MAP</a>
+  <a href="keyboard.html">KEYBOARD MAP</a>
+</nav>
+
+<div class="wrap">
+  <header>
+    <div class="boot">
+      **** COMMODORE 64 BASIC V2 ****<br>
+      64K RAM SYSTEM&nbsp;&nbsp;38911 BASIC BYTES FREE<br>
+      <br>
+      READY.<br>
+      LOAD"<span class="bright">INSTRUCTION.SET</span>",8,1<br>
+      READY.<span class="bright">&#9608;</span>
+    </div>
+    <h1>INSTRUCTION SET<span>64</span></h1>
+    <div class="sub">Every documented instruction the <b>6510</b> runs, what it does, and which flags it touches. The flag row is N Z C I D V, lit where the instruction changes it.</div>
+  </header>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="SEARCH: LDA, BRANCH, CARRY ...">
+    <div class="filters" id="filters"></div>
+  </div>
+  <div class="count" id="count"></div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<footer>
+  A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; NOT AFFILIATED WITH COMMODORE
+</footer>
+
+<script>
+const GROUPS = {
+  load:   { label:"Load / Store", color:"var(--g-load)" },
+  trans:  { label:"Transfer",     color:"var(--g-trans)" },
+  stack:  { label:"Stack",        color:"var(--g-stack)" },
+  alu:    { label:"Arithmetic / Logic", color:"var(--g-alu)" },
+  rmw:    { label:"Shift / Inc-Dec",    color:"var(--g-rmw)" },
+  cmp:    { label:"Compare",      color:"var(--g-cmp)" },
+  branch: { label:"Branch",       color:"var(--g-branch)" },
+  jump:   { label:"Jump / Sub",   color:"var(--g-jump)" },
+  flag:   { label:"Flag",         color:"var(--g-flag)" },
+  ctrl:   { label:"Control",      color:"var(--g-ctrl)" }
+};
+
+const F = (n,z,c,i,d,v) => ({N:!!n,Z:!!z,C:!!c,I:!!i,D:!!d,V:!!v});
+const NONE = F(0,0,0,0,0,0);
+
+const INS = [
+  ["LDA","Load Accumulator","Load a byte into A.","load",F(1,1,0,0,0,0)],
+  ["LDX","Load X","Load a byte into X.","load",F(1,1,0,0,0,0)],
+  ["LDY","Load Y","Load a byte into Y.","load",F(1,1,0,0,0,0)],
+  ["STA","Store Accumulator","Write A to memory.","load",NONE],
+  ["STX","Store X","Write X to memory.","load",NONE],
+  ["STY","Store Y","Write Y to memory.","load",NONE],
+  ["TAX","Transfer A to X","Copy A into X.","trans",F(1,1,0,0,0,0)],
+  ["TAY","Transfer A to Y","Copy A into Y.","trans",F(1,1,0,0,0,0)],
+  ["TXA","Transfer X to A","Copy X into A.","trans",F(1,1,0,0,0,0)],
+  ["TYA","Transfer Y to A","Copy Y into A.","trans",F(1,1,0,0,0,0)],
+  ["TSX","Transfer SP to X","Copy stack pointer into X.","trans",F(1,1,0,0,0,0)],
+  ["TXS","Transfer X to SP","Copy X into stack pointer.","trans",NONE],
+  ["PHA","Push A","Push A onto the stack.","stack",NONE],
+  ["PLA","Pull A","Pull a byte from the stack into A.","stack",F(1,1,0,0,0,0)],
+  ["PHP","Push Processor Status","Push the status register.","stack",NONE],
+  ["PLP","Pull Processor Status","Pull the status register.","stack",F(1,1,1,1,1,1)],
+  ["ADC","Add with Carry","A = A + M + carry.","alu",F(1,1,1,0,0,1)],
+  ["SBC","Subtract with Carry","A = A - M - not carry.","alu",F(1,1,1,0,0,1)],
+  ["AND","Logical AND","A = A AND M.","alu",F(1,1,0,0,0,0)],
+  ["ORA","Logical OR","A = A OR M.","alu",F(1,1,0,0,0,0)],
+  ["EOR","Exclusive OR","A = A XOR M.","alu",F(1,1,0,0,0,0)],
+  ["CMP","Compare with A","Set flags from A - M.","cmp",F(1,1,1,0,0,0)],
+  ["CPX","Compare with X","Set flags from X - M.","cmp",F(1,1,1,0,0,0)],
+  ["CPY","Compare with Y","Set flags from Y - M.","cmp",F(1,1,1,0,0,0)],
+  ["BIT","Bit Test","Test bits of M against A.","cmp",F(1,1,0,0,0,1)],
+  ["ASL","Arithmetic Shift Left","Shift left, bit 7 into carry.","rmw",F(1,1,1,0,0,0)],
+  ["LSR","Logical Shift Right","Shift right, bit 0 into carry.","rmw",F(1,1,1,0,0,0)],
+  ["ROL","Rotate Left","Rotate left through carry.","rmw",F(1,1,1,0,0,0)],
+  ["ROR","Rotate Right","Rotate right through carry.","rmw",F(1,1,1,0,0,0)],
+  ["INC","Increment Memory","M = M + 1.","rmw",F(1,1,0,0,0,0)],
+  ["DEC","Decrement Memory","M = M - 1.","rmw",F(1,1,0,0,0,0)],
+  ["INX","Increment X","X = X + 1.","rmw",F(1,1,0,0,0,0)],
+  ["INY","Increment Y","Y = Y + 1.","rmw",F(1,1,0,0,0,0)],
+  ["DEX","Decrement X","X = X - 1.","rmw",F(1,1,0,0,0,0)],
+  ["DEY","Decrement Y","Y = Y - 1.","rmw",F(1,1,0,0,0,0)],
+  ["BPL","Branch if Plus","Branch if N clear.","branch",NONE],
+  ["BMI","Branch if Minus","Branch if N set.","branch",NONE],
+  ["BVC","Branch if Overflow Clear","Branch if V clear.","branch",NONE],
+  ["BVS","Branch if Overflow Set","Branch if V set.","branch",NONE],
+  ["BCC","Branch if Carry Clear","Branch if C clear.","branch",NONE],
+  ["BCS","Branch if Carry Set","Branch if C set.","branch",NONE],
+  ["BNE","Branch if Not Equal","Branch if Z clear.","branch",NONE],
+  ["BEQ","Branch if Equal","Branch if Z set.","branch",NONE],
+  ["JMP","Jump","Jump to address.","jump",NONE],
+  ["JSR","Jump to Subroutine","Call subroutine, push return.","jump",NONE],
+  ["RTS","Return from Subroutine","Return from a JSR call.","jump",NONE],
+  ["RTI","Return from Interrupt","Return from an interrupt.","jump",F(1,1,1,1,1,1)],
+  ["CLC","Clear Carry","C = 0.","flag",F(0,0,1,0,0,0)],
+  ["SEC","Set Carry","C = 1.","flag",F(0,0,1,0,0,0)],
+  ["CLI","Clear Interrupt Disable","I = 0.","flag",F(0,0,0,1,0,0)],
+  ["SEI","Set Interrupt Disable","I = 1.","flag",F(0,0,0,1,0,0)],
+  ["CLD","Clear Decimal","D = 0.","flag",F(0,0,0,0,1,0)],
+  ["SED","Set Decimal","D = 1.","flag",F(0,0,0,0,1,0)],
+  ["CLV","Clear Overflow","V = 0.","flag",F(0,0,0,0,0,1)],
+  ["BRK","Force Interrupt","Software interrupt.","ctrl",F(0,0,0,1,0,0)],
+  ["NOP","No Operation","Do nothing.","ctrl",NONE]
+];
+
+const FLAG_ORDER = [["N","N"],["Z","Z"],["C","C"],["I","I"],["D","D"],["V","V"]];
+let activeGroup = "all";
+let query = "";
+
+const grid = document.getElementById("grid");
+const countEl = document.getElementById("count");
+const filtersEl = document.getElementById("filters");
+
+function buildFilters() {
+  const groupsPresent = [...new Set(INS.map(i => i[3]))];
+  const all = document.createElement("div");
+  all.className = "chip active"; all.textContent = "ALL"; all.dataset.g = "all";
+  filtersEl.appendChild(all);
+  groupsPresent.forEach(g => {
+    const c = document.createElement("div");
+    c.className = "chip"; c.textContent = GROUPS[g].label; c.dataset.g = g;
+    filtersEl.appendChild(c);
+  });
+  filtersEl.addEventListener("click", e => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    activeGroup = chip.dataset.g;
+    [...filtersEl.children].forEach(c => c.classList.toggle("active", c === chip));
+    render();
+  });
+}
+
+function flagsHTML(flags) {
+  return '<div class="flags">' + FLAG_ORDER.map(([k,lbl]) =>
+    `<div class="flag ${flags[k] ? "on":""}" title="${lbl}">${lbl}</div>`
+  ).join("") + '</div>';
+}
+
+function render() {
+  const q = query.trim().toLowerCase();
+  const items = INS.filter(([mnem,name,,grp]) => {
+    if (activeGroup !== "all" && grp !== activeGroup) return false;
+    if (!q) return true;
+    return mnem.toLowerCase().includes(q) || name.toLowerCase().includes(q) || GROUPS[grp].label.toLowerCase().includes(q);
+  });
+  grid.innerHTML = "";
+  if (items.length === 0) {
+    grid.innerHTML = '<div class="empty">NO INSTRUCTION MATCHES THAT.</div>';
+    countEl.textContent = "0 OF 56";
+    return;
+  }
+  items.forEach(([mnem,name,desc,grp,flags]) => {
+    const color = GROUPS[grp].color;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.setProperty("--grp-color", color);
+    card.innerHTML =
+      `<div class="card-top"><div class="mnem">${mnem}</div><div class="grp-tag">${GROUPS[grp].label}</div></div>
+       <div class="name">${name}</div>
+       <div class="desc">${desc}</div>
+       ${flagsHTML(flags)}`;
+    grid.appendChild(card);
+  });
+  countEl.textContent = `${items.length} OF 56 SHOWN`;
+}
+
+document.getElementById("search").addEventListener("input", e => { query = e.target.value; render(); });
+buildFilters();
+render();
+</script>
+</body>
+</html>

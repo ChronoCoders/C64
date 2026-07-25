@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commodore 64 · System Map</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  @font-face {
+    font-family: 'C64';
+    src: url('https://fonts.cdnfonts.com/s/28850/PetMe64.woff') format('woff');
+    font-display: swap;
+  }
+
+  :root {
+    /* VIC-II (Pepto) palette, the real 16 */
+    --black:      #000000;
+    --white:      #FFFFFF;
+    --red:        #68372B;
+    --cyan:       #70A4B2;
+    --purple:     #6F3D86;
+    --green:      #588D43;
+    --blue:       #352879;
+    --yellow:     #B8C76F;
+    --orange:     #6F4F25;
+    --brown:      #433900;
+    --lightred:   #9A6759;
+    --darkgrey:   #444444;
+    --grey:       #6C6C6C;
+    --lightgreen: #9AD284;
+    --lightblue:  #6C5EB5;
+    --lightgrey:  #959595;
+
+    --bg:      #000000;
+    --panel:   #0a0a0a;
+    --panel2:  #141414;
+    --line:    #352879;
+    --text:    #d7d3ee;
+    --dim:     #8b85b8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'C64', 'Courier New', monospace;
+    -webkit-font-smoothing: none;
+    image-rendering: pixelated;
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 0 0 80px;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px);
+    z-index: 9999; mix-blend-mode: multiply;
+  }
+  /* shared nav */
+  .topnav {
+    border-bottom: 3px solid var(--lightblue); background: var(--black);
+    padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center;
+    font-size: clamp(9px,1.3vw,12px); letter-spacing: 1px;
+  }
+  .topnav a { color: var(--lightblue); text-decoration: none; }
+  .topnav a:hover { color: var(--yellow); }
+  .topnav a.here { color: var(--yellow); }
+
+  a { color: var(--lightgreen); }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- header ---------- */
+  header {
+    border-bottom: 2px solid var(--line);
+    background:
+      repeating-linear-gradient(
+        180deg,
+        rgba(255,255,255,0.02) 0px,
+        rgba(255,255,255,0.02) 1px,
+        transparent 1px,
+        transparent 3px
+      ),
+      var(--panel);
+    padding: 44px 0 32px;
+    margin-bottom: 44px;
+  }
+  h1 {
+    font-family: 'C64', monospace;
+    font-size: clamp(24px, 4.4vw, 44px);
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--white);
+    text-shadow: 3px 3px 0 var(--red);
+    margin-bottom: 14px;
+  }
+  header p {
+    color: var(--dim);
+    max-width: 72ch;
+    font-size: 13px;
+  }
+  .specline {
+    margin-top: 18px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 26px;
+    font-size: 12px;
+    color: var(--lightgrey);
+  }
+  .specline b { color: var(--lightgreen); font-weight: 500; }
+
+  /* ---------- section ---------- */
+  section { margin-bottom: 56px; }
+  h2 {
+    font-family: 'C64', monospace;
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--yellow);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h2::before {
+    content: "";
+    width: 10px; height: 10px;
+    background: var(--yellow);
+    flex: none;
+  }
+  .lede { color: var(--dim); font-size: 13px; margin-bottom: 22px; max-width: 78ch; }
+
+  /* ---------- bus diagram ---------- */
+  .bus {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 26px 22px;
+    overflow-x: auto;
+  }
+  .bus svg { display: block; min-width: 860px; width: 100%; height: auto; }
+  .bus text { font-family: 'JetBrains Mono', monospace; }
+
+  /* ---------- chip grid ---------- */
+  .chips {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .chip {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--c, var(--grey));
+    padding: 18px 20px;
+  }
+  .chip h3 {
+    font-family: 'C64', monospace;
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 1px;
+    color: var(--c, var(--white));
+    margin-bottom: 3px;
+  }
+  .chip .part {
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 12px;
+  }
+  .chip .addr {
+    display: inline-block;
+    font-size: 11px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    color: var(--lightgrey);
+    padding: 1px 7px;
+    margin-bottom: 12px;
+  }
+  .chip .job {
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+  .chip ul { list-style: none; }
+  .chip li {
+    font-size: 12px;
+    color: var(--dim);
+    padding-left: 14px;
+    position: relative;
+    margin-bottom: 4px;
+  }
+  .chip li::before {
+    content: "\25B8";
+    position: absolute;
+    left: 0;
+    color: var(--c, var(--grey));
+  }
+  .chip li b { color: var(--text); font-weight: 500; }
+
+  /* ---------- memory map (signature) ---------- */
+  .mapgrid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 22px;
+    align-items: stretch;
+  }
+  @media (max-width: 900px) {
+    .mapgrid { grid-template-columns: 1fr; }
+  }
+
+  .map {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 6px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    align-items: stretch;
+    gap: 8px;
+    padding: 2px 6px;
+  }
+  .range {
+    font-size: 11px;
+    color: var(--lightgrey);
+    display: flex;
+    align-items: center;
+    letter-spacing: 0.5px;
+  }
+  .cell {
+    padding: 9px 12px;
+    border-left: 4px solid var(--c, var(--grey));
+    background: var(--panel2);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: background 140ms ease, border-color 140ms ease;
+  }
+  .cell .what { color: var(--white); }
+  .cell .note { color: var(--dim); font-size: 11px; text-align: right; }
+  .cell.switched { box-shadow: inset 0 0 0 1px var(--line); }
+
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .controls h4 {
+    font-family: 'C64', monospace;
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 1px;
+    color: var(--white);
+    margin-bottom: 4px;
+  }
+  .controls .sub { font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+
+  .bit {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+    cursor: pointer;
+    user-select: none;
+  }
+  .bit:last-of-type { border-bottom: 1px solid var(--line); }
+  .switch {
+    flex: none;
+    width: 38px; height: 20px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    position: relative;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    background: var(--grey);
+    transition: transform 120ms ease, background 120ms ease;
+  }
+  .bit[aria-pressed="true"] .switch::after {
+    transform: translateX(18px);
+    background: var(--lightgreen);
+  }
+  .bit .name { font-size: 12px; color: var(--white); }
+  .bit .desc { font-size: 11px; color: var(--dim); }
+  .bit:focus-visible { outline: 2px solid var(--lightgreen); outline-offset: 2px; }
+
+  .val {
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .val b { color: var(--yellow); font-weight: 500; }
+  .presets { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset {
+    font-family: inherit;
+    font-size: 11px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    color: var(--lightgrey);
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+  .preset:hover { border-color: var(--lightgreen); color: var(--lightgreen); }
+  .preset:focus-visible { outline: 2px solid var(--lightgreen); outline-offset: 2px; }
+
+  /* ---------- ports ---------- */
+  .ports {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+  }
+  .port {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .port h4 {
+    font-size: 12px;
+    color: var(--white);
+    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+  }
+  .port p { font-size: 12px; color: var(--dim); }
+  .port .via { font-size: 11px; color: var(--lightgreen); margin-top: auto; padding-top: 10px; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 22px;
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="index.html">HOME</a>
+  <a href="instructions.html">INSTRUCTION SET</a>
+  <a href="system-map.html" class="here">SYSTEM MAP</a>
+  <a href="drive-map.html">DRIVE MAP</a>
+  <a href="keyboard.html">KEYBOARD MAP</a>
+</nav>
+
+<header>
+  <div class="wrap">
+    <h1>COMMODORE 64</h1>
+    <p>Everything inside the case: the processor, the two custom chips that made it famous, the two interface adapters, the memory, and the bus that ties them together. Each part, and what it actually does.</p>
+    <div class="specline">
+      <span><b>CPU</b> MOS 6510</span>
+      <span><b>Clock</b> 985248 Hz PAL / 1022727 Hz NTSC</span>
+      <span><b>RAM</b> 64 KB</span>
+      <span><b>ROM</b> 20 KB (KERNAL + BASIC + Character)</span>
+      <span><b>Released</b> 1982</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= BUS ================= -->
+  <section>
+    <h2>THE BUS</h2>
+    <p class="lede">One 16-bit address bus and one 8-bit data bus. The CPU normally drives them, but the VIC-II can take the bus away from it: when the video chip needs data, it pulls <b>BA</b> low and the CPU is stalled. That single wire is why the machine's timing is what it is.</p>
+
+    <div class="bus">
+      <svg viewBox="0 0 920 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Block diagram of the C64. The VIC-II stalls the CPU with the BA line. CPU, VIC, Color RAM and memory sit on the address and data bus, with SID, CIA1 and CIA2 below it. VIC and CIA1 share one IRQ line into the CPU; CIA2 drives NMI.">
+
+        <!-- ===== BA, over the top ===== -->
+        <path d="M 360 56 L 360 28 L 210 28 L 210 50" fill="none" stroke="#B8C76F" stroke-width="2" stroke-dasharray="5 4"/>
+        <polygon points="210,56 205,47 215,47" fill="#B8C76F"/>
+        <text x="372" y="24" fill="#B8C76F" font-size="10">BA · the VIC stalls the CPU whenever it needs the bus</text>
+
+        <!-- ===== row 1 ===== -->
+        <rect x="110" y="56" width="175" height="84" fill="#161233" stroke="#9A6759" stroke-width="2"/>
+        <text x="126" y="84" fill="#9A6759" font-size="13" font-weight="700">6510 CPU</text>
+        <text x="126" y="104" fill="#d7d3ee" font-size="11">runs the program</text>
+        <text x="126" y="121" fill="#8b85b8" font-size="10">$00/$01 control banking</text>
+
+        <rect x="340" y="56" width="175" height="84" fill="#161233" stroke="#9AD284" stroke-width="2"/>
+        <text x="356" y="84" fill="#9AD284" font-size="13" font-weight="700">VIC-II</text>
+        <text x="356" y="104" fill="#d7d3ee" font-size="11">draws the screen</text>
+        <text x="356" y="121" fill="#8b85b8" font-size="10">reads memory by itself</text>
+
+        <rect x="570" y="56" width="145" height="84" fill="#161233" stroke="#6F4F25" stroke-width="2"/>
+        <text x="586" y="84" fill="#6F4F25" font-size="13" font-weight="700">COLOR RAM</text>
+        <text x="586" y="104" fill="#d7d3ee" font-size="11">1 KB, 4 bits wide</text>
+        <text x="586" y="121" fill="#8b85b8" font-size="10">one color per cell</text>
+
+        <rect x="755" y="56" width="145" height="84" fill="#161233" stroke="#6C6C6C" stroke-width="2"/>
+        <text x="771" y="84" fill="#959595" font-size="13" font-weight="700">RAM + ROM</text>
+        <text x="771" y="104" fill="#d7d3ee" font-size="11">64 KB + 20 KB</text>
+        <text x="771" y="121" fill="#8b85b8" font-size="10">overlaid by the PLA</text>
+
+        <!-- ===== the bus ===== -->
+        <line x1="197" y1="140" x2="197" y2="172" stroke="#9A6759" stroke-width="2"/>
+        <line x1="427" y1="140" x2="427" y2="172" stroke="#9AD284" stroke-width="2"/>
+        <line x1="642" y1="140" x2="642" y2="172" stroke="#6F4F25" stroke-width="2"/>
+        <line x1="827" y1="140" x2="827" y2="172" stroke="#6C6C6C" stroke-width="2"/>
+
+        <rect x="80" y="172" width="820" height="10" fill="#2e2760"/>
+        <text x="80" y="166" fill="#8b85b8" font-size="11">ADDRESS BUS · 16 bit</text>
+
+        <rect x="80" y="198" width="820" height="10" fill="#2e2760"/>
+        <text x="80" y="226" fill="#8b85b8" font-size="11">DATA BUS · 8 bit</text>
+
+        <line x1="197" y1="208" x2="197" y2="254" stroke="#B8C76F" stroke-width="2"/>
+        <line x1="427" y1="208" x2="427" y2="254" stroke="#70A4B2" stroke-width="2"/>
+        <line x1="657" y1="208" x2="657" y2="254" stroke="#6C5EB5" stroke-width="2"/>
+
+        <!-- ===== row 2 ===== -->
+        <rect x="110" y="254" width="175" height="84" fill="#161233" stroke="#B8C76F" stroke-width="2"/>
+        <text x="126" y="282" fill="#B8C76F" font-size="13" font-weight="700">SID</text>
+        <text x="126" y="302" fill="#d7d3ee" font-size="11">makes the sound</text>
+        <text x="126" y="319" fill="#8b85b8" font-size="10">3 voices, analog filter</text>
+
+        <rect x="340" y="254" width="175" height="84" fill="#161233" stroke="#70A4B2" stroke-width="2"/>
+        <text x="356" y="282" fill="#70A4B2" font-size="13" font-weight="700">CIA 1</text>
+        <text x="356" y="302" fill="#d7d3ee" font-size="11">keyboard, joysticks</text>
+        <text x="356" y="319" fill="#8b85b8" font-size="10">the 50 Hz timer tick</text>
+
+        <rect x="570" y="254" width="175" height="84" fill="#161233" stroke="#6C5EB5" stroke-width="2"/>
+        <text x="586" y="282" fill="#6C5EB5" font-size="13" font-weight="700">CIA 2</text>
+        <text x="586" y="302" fill="#d7d3ee" font-size="11">disk, user port</text>
+        <text x="586" y="319" fill="#8b85b8" font-size="10">also picks the VIC bank</text>
+
+        <!-- ===== IRQ: one shared wire, two chips pull it ===== -->
+        <line x1="62" y1="82" x2="62" y2="366" stroke="#B8C76F" stroke-width="2"/>
+        <line x1="62" y1="82" x2="105" y2="82" stroke="#B8C76F" stroke-width="2"/>
+        <polygon points="110,82 101,77 101,87" fill="#B8C76F"/>
+        <text x="70" y="72" fill="#B8C76F" font-size="10">IRQ</text>
+
+        <path d="M 380 140 L 380 155 L 62 155" fill="none" stroke="#9AD284" stroke-width="2" stroke-dasharray="5 4"/>
+        <circle cx="62" cy="155" r="3.5" fill="#B8C76F"/>
+        <text x="388" y="152" fill="#9AD284" font-size="10">raster</text>
+
+        <path d="M 380 338 L 380 366 L 62 366" fill="none" stroke="#70A4B2" stroke-width="2" stroke-dasharray="5 4"/>
+        <circle cx="62" cy="366" r="3.5" fill="#B8C76F"/>
+        <text x="388" y="362" fill="#70A4B2" font-size="10">timer, keyboard</text>
+
+        <!-- ===== NMI: its own wire ===== -->
+        <line x1="32" y1="108" x2="32" y2="384" stroke="#6C5EB5" stroke-width="2"/>
+        <line x1="32" y1="108" x2="105" y2="108" stroke="#6C5EB5" stroke-width="2"/>
+        <polygon points="110,108 101,103 101,113" fill="#6C5EB5"/>
+        <text x="70" y="122" fill="#6C5EB5" font-size="10">NMI</text>
+
+        <path d="M 610 338 L 610 384 L 32 384" fill="none" stroke="#6C5EB5" stroke-width="2" stroke-dasharray="5 4"/>
+        <text x="618" y="380" fill="#6C5EB5" font-size="10">and the RESTORE key</text>
+
+        <text x="32" y="412" fill="#6C6C6C" font-size="10">IRQ is one wire. The VIC and CIA 1 both pull it low, and the CPU cannot tell which without asking.</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ================= CHIPS ================= -->
+  <section>
+    <h2>THE CHIPS</h2>
+    <p class="lede">Five chips do the work. Two of them, the VIC-II and the SID, are the reason the machine outlived its rivals.</p>
+
+    <div class="chips">
+
+      <article class="chip" style="--c: var(--lightred)">
+        <h3>6510 · PROCESSOR</h3>
+        <div class="part">MOS 6510 · 6502 core with an on-chip I/O port</div>
+        <span class="addr">$0000 – $0001</span>
+        <p class="job">Runs every instruction the machine executes. It is a 6502 with one addition that changes everything: six I/O pins, and the register that controls them sits at address $01.</p>
+        <ul>
+          <li><b>$00</b> data direction, <b>$01</b> the port itself</li>
+          <li><b>Three bits of $01</b> decide what the CPU sees at $A000, $D000 and $E000</li>
+          <li><b>Two more</b> drive the datasette motor and sense its play key</li>
+          <li>Runs at <b>985248 Hz</b> on PAL, and can be stalled by the VIC-II</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--lightgreen)">
+        <h3>VIC-II · VIDEO</h3>
+        <div class="part">MOS 6569 (PAL) / 6567 (NTSC)</div>
+        <span class="addr">$D000 – $D3FF</span>
+        <p class="job">Produces the picture, on its own, in step with the electron beam. It reads memory by itself and stops the CPU whenever it needs the bus, which is what makes C64 timing a craft.</p>
+        <ul>
+          <li><b>Text</b> 40x25, <b>bitmap</b> 320x200, from <b>16 colors</b></li>
+          <li><b>8 sprites</b>, 24x21 each, with collision detection</li>
+          <li><b>Raster interrupt</b>: fire at a chosen scanline, the basis of split screens</li>
+          <li><b>Badlines</b>: every 8th line it steals 40 cycles from the CPU</li>
+          <li>Sees memory through a <b>16 KB window</b>, selected by CIA 2</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--yellow)">
+        <h3>SID · SOUND</h3>
+        <div class="part">MOS 6581 (later 8580)</div>
+        <span class="addr">$D400 – $D7FF</span>
+        <p class="job">A real synthesiser on a chip, not a beeper. Three voices, each with its own waveform and envelope, all fed through one analog filter, which is why no two machines sound quite alike.</p>
+        <ul>
+          <li><b>3 voices</b>, each: triangle, sawtooth, pulse, noise</li>
+          <li><b>ADSR envelope</b> per voice, so notes have shape</li>
+          <li><b>Analog filter</b>: low, band and high pass, with resonance</li>
+          <li><b>Ring modulation</b> and <b>hard sync</b> between voices</li>
+          <li>The volume register at <b>$D418</b> could be abused to play samples, which is how games learned to talk</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--cyan)">
+        <h3>CIA 1 · INPUT</h3>
+        <div class="part">MOS 6526 · Complex Interface Adapter</div>
+        <span class="addr">$DC00 – $DCFF</span>
+        <p class="job">Everything you touch. It scans the keyboard, reads both joysticks, and its timer produces the interrupt that drives the whole system 50 or 60 times a second.</p>
+        <ul>
+          <li><b>Port A</b> selects a keyboard row, and reads joystick 2</li>
+          <li><b>Port B</b> reads the keyboard columns, and joystick 1</li>
+          <li>Keyboard and joystick <b>share the same lines</b>, which is why port 1 fights with typing and everyone used port 2</li>
+          <li><b>Two 16-bit timers</b>, a clock, and a shift register</li>
+          <li>Raises <b>IRQ</b>: the timer tick that scans keys and counts the clock</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--lightblue)">
+        <h3>CIA 2 · THE OUTSIDE WORLD</h3>
+        <div class="part">MOS 6526 · second one, different job</div>
+        <span class="addr">$DD00 – $DDFF</span>
+        <p class="job">Talks to everything outside the case: the disk drive, the printer, a modem. It also holds the two bits that decide which 16 KB the video chip can see.</p>
+        <ul>
+          <li><b>Serial bus</b> (ATN, CLK, DATA) to the 1541 drive and printers</li>
+          <li><b>User port</b>, where modems and homemade hardware went</li>
+          <li><b>Bits 0 and 1</b> of its Port A select the <b>VIC bank</b></li>
+          <li>Two timers and a clock, same as CIA 1</li>
+          <li>Raises <b>NMI</b>, which is what the RESTORE key pulls</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--purple)">
+        <h3>PLA · THE TRAFFIC WARDEN</h3>
+        <div class="part">906114-01 Programmable Logic Array</div>
+        <span class="addr">no address of its own</span>
+        <p class="job">Not glamorous, but nothing works without it. It watches the address bus, the three bits in $01, and the cartridge lines, and decides who answers: RAM, ROM, or a chip.</p>
+        <ul>
+          <li>Decides <b>RAM or ROM or I/O</b> for every single access</li>
+          <li>This is what makes <b>all 64 KB usable</b> despite 20 KB of ROM</li>
+          <li>Writes always land in the RAM underneath, even where ROM is showing</li>
+          <li>A cartridge can override it and take the machine over at reset</li>
+        </ul>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ================= MEMORY MAP (signature) ================= -->
+  <section>
+    <h2>THE MEMORY MAP</h2>
+    <p class="lede">The 6510 can address 64 KB, and the machine has 64 KB of RAM plus 20 KB of ROM plus all the chips. They do not fit, so they take turns. Three bits in the CPU's own port at <b>$01</b> decide who is showing. Flip them and watch the map change, this is exactly what a program does before it reads under a ROM.</p>
+
+    <div class="mapgrid">
+      <div class="map" id="map">
+        <div class="row">
+          <div class="range">$FFFF – $E000</div>
+          <div class="cell" id="c-kernal"><span class="what"></span><span class="note"></span></div>
+        </div>
+        <div class="row">
+          <div class="range">$DFFF – $D000</div>
+          <div class="cell" id="c-io"><span class="what"></span><span class="note"></span></div>
+        </div>
+        <div class="row">
+          <div class="range">$CFFF – $C000</div>
+          <div class="cell" style="--c: var(--grey)"><span class="what">RAM</span><span class="note">always RAM, 4 KB scratch</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$BFFF – $A000</div>
+          <div class="cell" id="c-basic"><span class="what"></span><span class="note"></span></div>
+        </div>
+        <div class="row">
+          <div class="range">$9FFF – $0800</div>
+          <div class="cell" style="--c: var(--grey)"><span class="what">RAM</span><span class="note">where your BASIC program lives</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$07FF – $0400</div>
+          <div class="cell" style="--c: var(--lightgreen)"><span class="what">Screen RAM</span><span class="note">1000 characters, what you see</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$03FF – $0200</div>
+          <div class="cell" style="--c: var(--darkgrey)"><span class="what">System workspace</span><span class="note">KERNAL and BASIC variables</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$01FF – $0100</div>
+          <div class="cell" style="--c: var(--darkgrey)"><span class="what">Stack</span><span class="note">256 bytes, that is all you get</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$00FF – $0002</div>
+          <div class="cell" style="--c: var(--darkgrey)"><span class="what">Zero page</span><span class="note">the fast page, fought over by everyone</span></div>
+        </div>
+        <div class="row">
+          <div class="range">$0001 – $0000</div>
+          <div class="cell" style="--c: var(--lightred)"><span class="what">CPU port</span><span class="note">the three bits below live here</span></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <h4>$01 · CPU PORT</h4>
+        <p class="sub">The three bits that rearrange the machine.</p>
+
+        <div class="bit" id="b-loram" role="button" tabindex="0" aria-pressed="true">
+          <div class="switch" aria-hidden="true"></div>
+          <div>
+            <div class="name">LORAM · bit 0</div>
+            <div class="desc">BASIC ROM on or off</div>
+          </div>
+        </div>
+
+        <div class="bit" id="b-hiram" role="button" tabindex="0" aria-pressed="true">
+          <div class="switch" aria-hidden="true"></div>
+          <div>
+            <div class="name">HIRAM · bit 1</div>
+            <div class="desc">KERNAL ROM on or off</div>
+          </div>
+        </div>
+
+        <div class="bit" id="b-charen" role="button" tabindex="0" aria-pressed="true">
+          <div class="switch" aria-hidden="true"></div>
+          <div>
+            <div class="name">CHAREN · bit 2</div>
+            <div class="desc">chips, or the character ROM</div>
+          </div>
+        </div>
+
+        <div class="val">
+          <div>$01 = <b id="portval">%00110111</b></div>
+          <div id="portdesc" style="margin-top:6px"></div>
+        </div>
+
+        <div class="presets">
+          <button class="preset" data-p="7">Boot default</button>
+          <button class="preset" data-p="6">Hide BASIC</button>
+          <button class="preset" data-p="5">Char ROM</button>
+          <button class="preset" data-p="0">All RAM</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PORTS ================= -->
+  <section>
+    <h2>THE SOCKETS</h2>
+    <p class="lede">What the chips reach out to.</p>
+    <div class="ports">
+      <div class="port">
+        <h4>Serial bus (IEC)</h4>
+        <p>The round plug the 1541 disk drive and the printer hang off. Slow by design, and the reason fast loaders became an art form.</p>
+        <div class="via">driven by CIA 2</div>
+      </div>
+      <div class="port">
+        <h4>Control ports 1 and 2</h4>
+        <p>Joysticks, paddles, a light pen, a mouse. Port 2 is the one games actually use.</p>
+        <div class="via">read by CIA 1</div>
+      </div>
+      <div class="port">
+        <h4>User port</h4>
+        <p>Raw signal lines, no rules. Modems, printers, and every piece of hardware anyone soldered at home.</p>
+        <div class="via">driven by CIA 2</div>
+      </div>
+      <div class="port">
+        <h4>Video and audio</h4>
+        <p>Picture out of the VIC-II, sound out of the SID, into a monitor or a television.</p>
+        <div class="via">VIC-II and SID</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Addresses and behavior follow the PAL machine (6569 VIC-II, 6581 SID). Written as a reference while building a cycle-exact emulator.<br><br>
+    A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; NOT AFFILIATED WITH COMMODORE
+  </footer>
+
+</div>
+
+<script>
+  const state = { loram: true, hiram: true, charen: true };
+
+  const el = {
+    kernal: document.getElementById('c-kernal'),
+    io:     document.getElementById('c-io'),
+    basic:  document.getElementById('c-basic'),
+    val:    document.getElementById('portval'),
+    desc:   document.getElementById('portdesc'),
+  };
+
+  function setCell(node, color, what, note) {
+    node.style.setProperty('--c', color);
+    node.querySelector('.what').textContent = what;
+    node.querySelector('.note').textContent = note;
+  }
+
+  function render() {
+    const { loram, hiram, charen } = state;
+
+    // $E000-$FFFF: KERNAL if HIRAM, else RAM
+    if (hiram) {
+      setCell(el.kernal, 'var(--purple)', 'KERNAL ROM', 'the operating system, 8 KB');
+    } else {
+      setCell(el.kernal, 'var(--grey)', 'RAM', 'KERNAL hidden, 8 KB free');
+    }
+
+    // $A000-$BFFF: BASIC if LORAM && HIRAM, else RAM
+    if (loram && hiram) {
+      setCell(el.basic, 'var(--purple)', 'BASIC ROM', 'the language, 8 KB');
+    } else {
+      setCell(el.basic, 'var(--grey)', 'RAM', 'BASIC hidden, 8 KB free');
+    }
+
+    // $D000-$DFFF: I/O if CHAREN && (LORAM || HIRAM)
+    //              CHAR ROM if !CHAREN && (LORAM || HIRAM)
+    //              RAM if !LORAM && !HIRAM
+    if (!loram && !hiram) {
+      setCell(el.io, 'var(--grey)', 'RAM', 'even the chips are gone, 4 KB free');
+    } else if (charen) {
+      setCell(el.io, 'var(--cyan)', 'I/O · VIC · SID · Color RAM · CIA 1 · CIA 2', 'the chips themselves');
+    } else {
+      setCell(el.io, 'var(--orange)', 'Character ROM', 'the shapes of the letters, 4 KB');
+    }
+
+    const bits = (state.charen ? 4 : 0) | (state.hiram ? 2 : 0) | (state.loram ? 1 : 0);
+    el.val.textContent = '%00' + (0b110000 + bits).toString(2).padStart(6, '0').slice(0, 3) + (bits).toString(2).padStart(3, '0');
+    el.val.textContent = '%001' + ((bits & 4) ? '1' : '0') + ((bits & 2) ? '1' : '0') + ((bits & 1) ? '1' : '0') + '  ($' + (0x30 | bits).toString(16).toUpperCase() + ')';
+
+    const notes = [];
+    if (!hiram) notes.push('KERNAL is gone, so no interrupt handler and no I/O routines');
+    if (!(loram && hiram)) notes.push('BASIC is gone');
+    if (loram || hiram) {
+      notes.push(charen ? 'the chips answer at $D000' : 'the character ROM answers at $D000, the chips do not');
+    } else {
+      notes.push('nothing but RAM, the machine cannot even interrupt itself');
+    }
+    el.desc.textContent = notes.join('. ') + '.';
+
+    document.getElementById('b-loram').setAttribute('aria-pressed', String(loram));
+    document.getElementById('b-hiram').setAttribute('aria-pressed', String(hiram));
+    document.getElementById('b-charen').setAttribute('aria-pressed', String(charen));
+  }
+
+  function toggle(key) {
+    state[key] = !state[key];
+    render();
+  }
+
+  [['b-loram','loram'], ['b-hiram','hiram'], ['b-charen','charen']].forEach(([id, key]) => {
+    const node = document.getElementById(id);
+    node.addEventListener('click', () => toggle(key));
+    node.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(key); }
+    });
+  });
+
+  document.querySelectorAll('.preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = parseInt(btn.dataset.p, 10);
+      state.loram  = !!(p & 1);
+      state.hiram  = !!(p & 2);
+      state.charen = !!(p & 4);
+      render();
+    });
+  });
+
+  render();
+</script>
+
+</body>
+</html>

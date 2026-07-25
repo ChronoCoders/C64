@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commodore 1541 · System Map</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  @font-face {
+    font-family: 'C64';
+    src: url('https://fonts.cdnfonts.com/s/28850/PetMe64.woff') format('woff');
+    font-display: swap;
+  }
+
+  :root {
+    --black:      #000000;
+    --white:      #FFFFFF;
+    --red:        #68372B;
+    --cyan:       #70A4B2;
+    --purple:     #6F3D86;
+    --green:      #588D43;
+    --blue:       #352879;
+    --yellow:     #B8C76F;
+    --orange:     #6F4F25;
+    --brown:      #433900;
+    --lightred:   #9A6759;
+    --darkgrey:   #444444;
+    --grey:       #6C6C6C;
+    --lightgreen: #9AD284;
+    --lightblue:  #6C5EB5;
+    --lightgrey:  #959595;
+
+    --bg:      #000000;
+    --panel:   #0a0a0a;
+    --panel2:  #141414;
+    --line:    #352879;
+    --text:    #d7d3ee;
+    --dim:     #8b85b8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'C64', 'Courier New', monospace;
+    -webkit-font-smoothing: none;
+    image-rendering: pixelated;
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 0 0 80px;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px);
+    z-index: 9999; mix-blend-mode: multiply;
+  }
+  .topnav {
+    border-bottom: 3px solid var(--lightblue); background: var(--black);
+    padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center;
+    font-size: clamp(9px,1.3vw,12px); letter-spacing: 1px;
+  }
+  .topnav a { color: var(--lightblue); text-decoration: none; }
+  .topnav a:hover { color: var(--yellow); }
+  .topnav a.here { color: var(--yellow); }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    border-bottom: 2px solid var(--line);
+    background:
+      repeating-linear-gradient(180deg,
+        rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px,
+        transparent 1px, transparent 3px),
+      var(--panel);
+    padding: 44px 0 32px;
+    margin-bottom: 44px;
+  }
+  h1 {
+    font-family: 'C64', monospace;
+    font-size: clamp(22px, 4.2vw, 42px);
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--white);
+    text-shadow: 3px 3px 0 var(--green);
+    margin-bottom: 14px;
+  }
+  header p { color: var(--dim); max-width: 74ch; font-size: 13px; }
+  .specline {
+    margin-top: 18px;
+    display: flex; flex-wrap: wrap; gap: 10px 26px;
+    font-size: 12px; color: var(--lightgrey);
+  }
+  .specline b { color: var(--lightgreen); font-weight: 500; }
+
+  section { margin-bottom: 56px; }
+  h2 {
+    font-family: 'C64', monospace;
+    font-size: 15px; font-weight: 400; letter-spacing: 2px;
+    color: var(--yellow); margin-bottom: 6px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  h2::before {
+    content: ""; width: 10px; height: 10px;
+    background: var(--yellow); flex: none;
+  }
+  .lede { color: var(--dim); font-size: 13px; margin-bottom: 22px; max-width: 80ch; }
+  .lede b { color: var(--text); font-weight: 500; }
+
+  /* ---------- the two machines ---------- */
+  .bus {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 26px 22px;
+    overflow-x: auto;
+  }
+  .bus svg { display: block; min-width: 820px; width: 100%; height: auto; }
+  .bus text { font-family: 'JetBrains Mono', monospace; }
+
+  /* ---------- chips ---------- */
+  .chips {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .chip {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--c, var(--grey));
+    padding: 18px 20px;
+  }
+  .chip h3 {
+    font-family: 'C64', monospace;
+    font-size: 13px; font-weight: 400; letter-spacing: 1px;
+    color: var(--c, var(--white)); margin-bottom: 3px;
+  }
+  .chip .part { font-size: 11px; color: var(--dim); margin-bottom: 12px; }
+  .chip .addr {
+    display: inline-block; font-size: 11px;
+    background: var(--panel2); border: 1px solid var(--line);
+    color: var(--lightgrey); padding: 1px 7px; margin-bottom: 12px;
+  }
+  .chip .job { font-size: 13px; color: var(--text); margin-bottom: 14px; }
+  .chip ul { list-style: none; }
+  .chip li {
+    font-size: 12px; color: var(--dim);
+    padding-left: 14px; position: relative; margin-bottom: 4px;
+  }
+  .chip li::before {
+    content: "\25B8"; position: absolute; left: 0; color: var(--c, var(--grey));
+  }
+  .chip li b { color: var(--text); font-weight: 500; }
+
+  /* ---------- disk (signature) ---------- */
+  .diskgrid {
+    display: grid;
+    grid-template-columns: 1fr 330px;
+    gap: 22px;
+    align-items: stretch;
+  }
+  @media (max-width: 900px) { .diskgrid { grid-template-columns: 1fr; } }
+
+  .disk {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .disk svg { width: 100%; max-width: 460px; height: auto; }
+
+  .track-ring { cursor: pointer; }
+  .track-ring:hover { opacity: 0.85; }
+
+  .diskinfo {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 20px;
+    position: sticky; top: 20px;
+  }
+  .diskinfo h4 {
+    font-family: 'C64', monospace;
+    font-size: 12px; font-weight: 400; letter-spacing: 1px;
+    color: var(--white); margin-bottom: 4px;
+  }
+  .diskinfo .sub { font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+
+  .readout { border-top: 1px solid var(--line); padding-top: 14px; }
+  .readout .big {
+    font-size: 26px;
+    color: var(--lightgreen);
+    line-height: 1.2;
+    margin-bottom: 2px;
+  }
+  .readout .label { font-size: 11px; color: var(--dim); margin-bottom: 14px; }
+
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 12px; }
+  .kv dt { color: var(--dim); }
+  .kv dd { color: var(--text); text-align: right; }
+
+  .zones { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .zone {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--dim);
+    padding: 3px 0;
+  }
+  .swatch { width: 12px; height: 12px; flex: none; }
+
+  .slider { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .slider label { font-size: 11px; color: var(--dim); display: block; margin-bottom: 8px; }
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--lightgreen);
+    background: transparent;
+  }
+  input[type=range]:focus-visible { outline: 2px solid var(--lightgreen); outline-offset: 4px; }
+
+  /* ---------- why slow ---------- */
+  .why {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+  }
+  .card h4 { font-size: 12px; color: var(--white); margin-bottom: 6px; letter-spacing: 0.5px; }
+  .card p { font-size: 12px; color: var(--dim); }
+  .card .tag { font-size: 11px; color: var(--yellow); margin-top: auto; padding-top: 12px; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 22px;
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="index.html">HOME</a>
+  <a href="instructions.html">INSTRUCTION SET</a>
+  <a href="system-map.html">SYSTEM MAP</a>
+  <a href="drive-map.html" class="here">DRIVE MAP</a>
+  <a href="keyboard.html">KEYBOARD MAP</a>
+</nav>
+
+<header>
+  <div class="wrap">
+    <h1>COMMODORE 1541</h1>
+    <p>Not a peripheral. A second computer, with its own processor, its own memory, and its own operating system in ROM. The C64 does not read the disk. It asks the drive to, over five wires, one bit at a time.</p>
+    <div class="specline">
+      <span><b>CPU</b> MOS 6502 @ 1.0 MHz</span>
+      <span><b>RAM</b> 2 KB</span>
+      <span><b>ROM</b> 16 KB DOS</span>
+      <span><b>Capacity</b> 170 KB</span>
+      <span><b>Released</b> 1982</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ TWO MACHINES ============ -->
+  <section>
+    <h2>TWO COMPUTERS, FIVE WIRES</h2>
+    <p class="lede">The C64 and the drive each run their own program at their own clock, and neither can see the other's memory. Everything passes through the serial bus: <b>ATN</b> to get attention, <b>CLK</b> and <b>DATA</b> to hand over bits, one at a time, with a handshake for every single one. The two clocks are not even synchronised, which is exactly why a handshake was necessary.</p>
+
+    <div class="bus">
+      <svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The C64 and the 1541 as two separate machines connected only by the ATN, CLK and DATA lines of the serial bus.">
+        <!-- C64 side -->
+        <rect x="40" y="40" width="300" height="200" fill="#161233" stroke="#6C5EB5" stroke-width="2"/>
+        <text x="58" y="68" fill="#6C5EB5" font-size="13" font-weight="700">COMMODORE 64</text>
+        <text x="58" y="88" fill="#8b85b8" font-size="10">985248 Hz (PAL)</text>
+
+        <rect x="58" y="106" width="120" height="46" fill="#1e1940" stroke="#9A6759"/>
+        <text x="70" y="128" fill="#9A6759" font-size="11" font-weight="700">6510 CPU</text>
+        <text x="70" y="143" fill="#8b85b8" font-size="9">runs your program</text>
+
+        <rect x="196" y="106" width="126" height="46" fill="#1e1940" stroke="#6C5EB5"/>
+        <text x="208" y="128" fill="#6C5EB5" font-size="11" font-weight="700">CIA 2</text>
+        <text x="208" y="143" fill="#8b85b8" font-size="9">drives the bus</text>
+
+        <text x="58" y="182" fill="#d7d3ee" font-size="11">It only asks.</text>
+        <text x="58" y="200" fill="#8b85b8" font-size="10">KERNAL sends a command,</text>
+        <text x="58" y="216" fill="#8b85b8" font-size="10">then waits for bytes.</text>
+
+        <!-- the wires -->
+        <line x1="340" y1="120" x2="560" y2="120" stroke="#B8C76F" stroke-width="2"/>
+        <text x="392" y="112" fill="#B8C76F" font-size="10">ATN · listen to me</text>
+
+        <line x1="340" y1="150" x2="560" y2="150" stroke="#9AD284" stroke-width="2"/>
+        <text x="392" y="142" fill="#9AD284" font-size="10">CLK · a bit is ready</text>
+
+        <line x1="340" y1="180" x2="560" y2="180" stroke="#70A4B2" stroke-width="2"/>
+        <text x="392" y="172" fill="#70A4B2" font-size="10">DATA · the bit itself</text>
+
+        <text x="392" y="208" fill="#6C6C6C" font-size="9">every line is wired-AND:</text>
+        <text x="392" y="222" fill="#6C6C6C" font-size="9">anyone can pull it low</text>
+
+        <!-- drive side -->
+        <rect x="560" y="40" width="300" height="200" fill="#161233" stroke="#588D43" stroke-width="2"/>
+        <text x="578" y="68" fill="#588D43" font-size="13" font-weight="700">1541 DRIVE</text>
+        <text x="578" y="88" fill="#8b85b8" font-size="10">1000000 Hz, its own clock</text>
+
+        <rect x="578" y="106" width="120" height="46" fill="#1e1940" stroke="#9A6759"/>
+        <text x="590" y="128" fill="#9A6759" font-size="11" font-weight="700">6502 CPU</text>
+        <text x="590" y="143" fill="#8b85b8" font-size="9">runs the DOS</text>
+
+        <rect x="716" y="106" width="126" height="46" fill="#1e1940" stroke="#588D43"/>
+        <text x="728" y="128" fill="#588D43" font-size="11" font-weight="700">VIA 1 + VIA 2</text>
+        <text x="728" y="143" fill="#8b85b8" font-size="9">bus and mechanics</text>
+
+        <text x="578" y="182" fill="#d7d3ee" font-size="11">It does the work.</text>
+        <text x="578" y="200" fill="#8b85b8" font-size="10">Finds the track, reads the</text>
+        <text x="578" y="216" fill="#8b85b8" font-size="10">sector, sends it back.</text>
+
+        <!-- no shared memory note -->
+        <line x1="450" y1="258" x2="450" y2="290" stroke="#68372B" stroke-width="2" stroke-dasharray="4 3"/>
+        <text x="300" y="308" fill="#9A6759" font-size="10">no shared memory, no shared clock, nothing but these three signals</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ============ CHIPS ============ -->
+  <section>
+    <h2>INSIDE THE DRIVE</h2>
+    <p class="lede">Four parts, and one of them is a full processor sitting idle most of the time, waiting to be spoken to.</p>
+
+    <div class="chips">
+
+      <article class="chip" style="--c: var(--lightred)">
+        <h3>6502 · PROCESSOR</h3>
+        <div class="part">MOS 6502 · the same family as the C64's, without the I/O port</div>
+        <span class="addr">1.0 MHz</span>
+        <p class="job">Runs the DOS. It boots, tests its own memory, turns the motor off, lights the LED, and then sits in a loop waiting for the C64 to pull ATN.</p>
+        <ul>
+          <li>A <b>plain 6502</b>: no banking port, it never needed one</li>
+          <li>Its clock is <b>independent</b> of the C64's, they drift apart</li>
+          <li>Fast loaders work by <b>sending it new code</b> to run</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--grey)">
+        <h3>2 KB RAM</h3>
+        <div class="part">$0000 – $07FF</div>
+        <span class="addr">2048 bytes, that is all</span>
+        <p class="job">Enough for the DOS variables and a couple of sector buffers. A sector is 256 bytes, so the drive can only hold a handful at once, and reads a track piece by piece.</p>
+        <ul>
+          <li>Holds the <b>sector buffers</b> the DOS reads into</li>
+          <li>Small enough that <b>Dolphin DOS added 8 KB more</b>, so a whole track fits in one pass of the disk</li>
+          <li>Fast loaders upload their code <b>into here</b></li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--purple)">
+        <h3>16 KB DOS ROM</h3>
+        <div class="part">$C000 – $FFFF · CBM DOS 2.6</div>
+        <span class="addr">a whole operating system</span>
+        <p class="job">The drive's own OS. It knows the directory, the block map, file types, and how to turn a filename into a head position. The C64 sends it text commands, and it answers.</p>
+        <ul>
+          <li>Handles <b>LOAD, SAVE, directory, format, scratch</b></li>
+          <li>Reports status in plain English: <b>73, CBM DOS V2.6 1541</b></li>
+          <li>Notoriously slow, because the serial code inside it is careful, not fast</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--green)">
+        <h3>VIA 1 · THE BUS</h3>
+        <div class="part">MOS 6522 · Versatile Interface Adapter</div>
+        <span class="addr">$1800</span>
+        <p class="job">Talks to the C64. It senses ATN, drives CLK and DATA, and interrupts the drive CPU the moment the computer wants attention.</p>
+        <ul>
+          <li>The <b>ATN interrupt</b>: how the drive knows it is being called</li>
+          <li>Reads and pulls the <b>CLK and DATA</b> lines</li>
+          <li>Also carries the <b>device number jumpers</b> (8, 9, 10, 11)</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--cyan)">
+        <h3>VIA 2 · THE MECHANICS</h3>
+        <div class="part">MOS 6522 · the one wired to the hardware</div>
+        <span class="addr">$1C00</span>
+        <p class="job">Everything physical. The motor, the stepper that moves the head, the read/write electronics, and the signal that says a byte has arrived from under the head.</p>
+        <ul>
+          <li><b>Stepper motor</b>: two bits, and the head walks in half-track steps</li>
+          <li><b>Motor on/off</b> and the <b>LED</b> (the one that blinks red on an error)</li>
+          <li><b>BYTE READY</b>: raw bits from the disk arrive here, in GCR</li>
+          <li><b>Write protect</b> sense, and the density setting per zone</li>
+        </ul>
+      </article>
+
+      <article class="chip" style="--c: var(--orange)">
+        <h3>THE MECHANISM</h3>
+        <div class="part">read/write head, stepper, spindle</div>
+        <span class="addr">300 RPM</span>
+        <p class="job">A 5.25 inch floppy turning at 300 revolutions a minute, and a head that slides in and out. There is no sensor telling the drive where the head is: it counts steps, and hopes.</p>
+        <ul>
+          <li>No head position sensor, so on an error the DOS <b>bangs the head against track 1</b> to recalibrate. That is the noise everyone remembers.</li>
+          <li>The banging, over time, <b>knocked the head out of alignment</b></li>
+          <li>Copy protection deliberately used <b>errors the drive could not reproduce</b></li>
+        </ul>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ THE DISK (signature) ============ -->
+  <section>
+    <h2>THE DISK ITSELF</h2>
+    <p class="lede">35 tracks, but not the same number of sectors on each. The outer tracks are physically longer, so more data fits, and Commodore used that: the drive changes recording density as the head moves. Four zones, four densities. Click a track, or drag the head.</p>
+
+    <div class="diskgrid">
+      <div class="disk">
+        <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Disk surface showing 35 tracks in four density zones, with the current head position.">
+          <defs>
+            <radialGradient id="hub">
+              <stop offset="0%" stop-color="#2e2760"/>
+              <stop offset="100%" stop-color="#161233"/>
+            </radialGradient>
+          </defs>
+
+          <circle cx="200" cy="200" r="192" fill="#0d0b1a" stroke="#2e2760"/>
+          <g id="tracks"></g>
+          <circle cx="200" cy="200" r="34" fill="url(#hub)" stroke="#2e2760" stroke-width="2"/>
+          <circle cx="200" cy="200" r="10" fill="#0d0b1a" stroke="#2e2760"/>
+
+          <!-- head arm -->
+          <line id="arm" x1="200" y1="200" x2="200" y2="60" stroke="#B8C76F" stroke-width="2" opacity="0.5"/>
+          <circle id="head" cx="200" cy="60" r="6" fill="#B8C76F"/>
+          <text id="headlabel" x="200" y="42" fill="#B8C76F" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace">T18</text>
+        </svg>
+      </div>
+
+      <div class="diskinfo">
+        <h4>HEAD POSITION</h4>
+        <p class="sub">Where the mechanism is, and what is under it.</p>
+
+        <div class="readout">
+          <div class="big" id="tracknum">Track 18</div>
+          <div class="label" id="trackrole">the directory, dead centre, so the head has the shortest average trip</div>
+
+          <dl class="kv">
+            <dt>Sectors on this track</dt><dd id="sectors">19</dd>
+            <dt>Zone</dt><dd id="zone">3</dd>
+            <dt>Density</dt><dd id="density">medium</dd>
+            <dt>Bytes on this track</dt><dd id="bytes">4864</dd>
+          </dl>
+        </div>
+
+        <div class="slider">
+          <label for="headslider">Move the head (tracks 1 to 35)</label>
+          <input type="range" id="headslider" min="1" max="35" value="18" step="1" aria-describedby="tracknum">
+        </div>
+
+        <div class="zones">
+          <div class="zone"><span class="swatch" style="background:#9AD284"></span> Tracks 1–17 · 21 sectors · fastest zone</div>
+          <div class="zone"><span class="swatch" style="background:#70A4B2"></span> Tracks 18–24 · 19 sectors</div>
+          <div class="zone"><span class="swatch" style="background:#6C5EB5"></span> Tracks 25–30 · 18 sectors</div>
+          <div class="zone"><span class="swatch" style="background:#6F3D86"></span> Tracks 31–35 · 17 sectors · slowest zone</div>
+        </div>
+
+        <div class="readout" style="margin-top:18px">
+          <dl class="kv">
+            <dt>Total sectors</dt><dd>683</dd>
+            <dt>Bytes per sector</dt><dd>256</dd>
+            <dt>Capacity</dt><dd>174848 bytes</dd>
+            <dt>Free to a user</dt><dd>664 blocks</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WHY SLOW ============ -->
+  <section>
+    <h2>WHY IT WAS SO SLOW</h2>
+    <p class="lede">The 1541 could move roughly 300 bytes a second out of the box. The hardware was capable of far more, and every fast loader ever written is a story about working around this.</p>
+
+    <div class="why">
+      <div class="card">
+        <h4>The bus was crippled late</h4>
+        <p>The design had a fast parallel scheme. It was dropped, and a slow bit-by-bit software handshake was used instead. The hardware shift register that would have made it fast sits there, unused.</p>
+        <div class="tag">a cost decision, not a technical limit</div>
+      </div>
+      <div class="card">
+        <h4>Every bit is negotiated</h4>
+        <p>Sender says a bit is ready, receiver says it took it. Two signals per bit, in software, on both sides. Eight bits a byte, and the drive is also busy turning a motor.</p>
+        <div class="tag">correctness bought with time</div>
+      </div>
+      <div class="card">
+        <h4>Only 2 KB to work with</h4>
+        <p>The drive cannot hold a whole track, so it reads a sector, sends it, waits, comes back for the next. The disk keeps spinning while it waits, so it misses the next sector and has to wait a full turn.</p>
+        <div class="tag">why extra RAM made drives fast</div>
+      </div>
+      <div class="card">
+        <h4>So people rewrote the drive</h4>
+        <p>Since the drive is a computer, you can send it your own program. Fast loaders do exactly that: upload new code into its RAM, then talk to it in a protocol Commodore never wrote.</p>
+        <div class="tag">the drive's openness was its rescue</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Standard 1541, PAL. Written as a reference while building a cycle-exact emulator: the drive is emulated as a second machine, its own 6502 clocked independently of the C64's.<br><br>
+    A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; NOT AFFILIATED WITH COMMODORE
+  </footer>
+
+</div>
+
+<script>
+  // 1541 zone table: [firstTrack, lastTrack, sectors, zoneName, density]
+  const ZONES = [
+    { from: 1,  to: 17, sectors: 21, zone: 1, density: 'highest', color: '#9AD284' },
+    { from: 18, to: 24, sectors: 19, zone: 2, density: 'high',    color: '#70A4B2' },
+    { from: 25, to: 30, sectors: 18, zone: 3, density: 'medium',  color: '#6C5EB5' },
+    { from: 31, to: 35, sectors: 17, zone: 4, density: 'lowest',  color: '#6F3D86' },
+  ];
+
+  function zoneFor(track) {
+    return ZONES.find(z => track >= z.from && track <= z.to);
+  }
+
+  const ROLES = {
+    1:  'the outermost track, where the head is parked and recalibrated by banging',
+    17: 'the last of the widest zone, 21 sectors',
+    18: 'the directory and the block map, dead centre so the head has the shortest average trip',
+    35: 'the innermost track, tightest packing, slowest zone',
+  };
+
+  const tracksG   = document.getElementById('tracks');
+  const arm       = document.getElementById('arm');
+  const head      = document.getElementById('head');
+  const headlabel = document.getElementById('headlabel');
+  const slider    = document.getElementById('headslider');
+
+  const R_IN = 46, R_OUT = 186;
+  const rFor = t => R_OUT - ((t - 1) / 34) * (R_OUT - R_IN);
+
+  // draw the 35 tracks
+  for (let t = 1; t <= 35; t++) {
+    const z = zoneFor(t);
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', 200);
+    c.setAttribute('cy', 200);
+    c.setAttribute('r', rFor(t));
+    c.setAttribute('fill', 'none');
+    c.setAttribute('stroke', z.color);
+    c.setAttribute('stroke-width', 3);
+    c.setAttribute('opacity', 0.32);
+    c.setAttribute('class', 'track-ring');
+    c.dataset.track = t;
+    c.addEventListener('click', () => setTrack(t));
+    tracksG.appendChild(c);
+  }
+
+  function setTrack(t) {
+    t = Math.max(1, Math.min(35, t));
+    const z = zoneFor(t);
+    const r = rFor(t);
+
+    // highlight
+    [...tracksG.children].forEach(c => {
+      const on = Number(c.dataset.track) === t;
+      c.setAttribute('opacity', on ? 1 : 0.28);
+      c.setAttribute('stroke-width', on ? 5 : 3);
+    });
+
+    head.setAttribute('cy', 200 - r);
+    arm.setAttribute('y1', 200 - r);
+    headlabel.setAttribute('y', 200 - r - 14);
+    headlabel.textContent = 'T' + t;
+    head.setAttribute('fill', z.color);
+    headlabel.setAttribute('fill', z.color);
+    arm.setAttribute('stroke', z.color);
+
+    document.getElementById('tracknum').textContent = 'Track ' + t;
+    document.getElementById('tracknum').style.color = z.color;
+    document.getElementById('sectors').textContent  = z.sectors;
+    document.getElementById('zone').textContent     = z.zone + ' of 4';
+    document.getElementById('density').textContent  = z.density;
+    document.getElementById('bytes').textContent    = (z.sectors * 256).toLocaleString('en-US');
+
+    let role = ROLES[t];
+    if (!role) {
+      role = 'tracks ' + z.from + ' to ' + z.to + ' hold ' + z.sectors +
+             ' sectors each, recorded at the ' + z.density + ' density';
+    }
+    document.getElementById('trackrole').textContent = role;
+
+    if (Number(slider.value) !== t) slider.value = t;
+  }
+
+  slider.addEventListener('input', e => setTrack(Number(e.target.value)));
+  setTrack(18);
+</script>
+
+</body>
+</html>
