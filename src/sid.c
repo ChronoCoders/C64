@@ -655,3 +655,19 @@ void sid_reset(void) {
 }
 
 void sid_init(void) { sid_reset(); }
+
+#define SID_SNAP_FIELDS(F)                                                     \
+    F(voice) F(reg) F(env) F(filt) F(filter_out) F(direct_out)                \
+    F(fir_hist) F(fir_pos) F(rs_phase) F(dc_lp) F(audio_primed)
+
+void sid_snapshot(SnapOut *o) {
+#define W(f) snap_write(o, &(f), sizeof(f));
+    SID_SNAP_FIELDS(W)
+#undef W
+}
+
+void sid_restore(SnapIn *i) {
+#define R(f) snap_read(i, &(f), sizeof(f));
+    SID_SNAP_FIELDS(R)
+#undef R
+}

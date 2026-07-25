@@ -47,3 +47,18 @@ bool cpu_halted(void) { return cpu6502_halted(&cpu); }
 uint8_t cpu_halt_opcode(void) { return cpu6502_halt_opcode(&cpu); }
 
 bool cpu_jammed(void) { return cpu6502_jammed(&cpu); }
+
+// Serialize the core up to its bus-callback pointers (ctx/rd/wr), which are set by
+// cpu6502_init and must survive a restore. Every execution/interrupt field precedes
+// them in the struct, so offsetof(ctx) is exactly the data prefix to save.
+void cpu_snapshot(SnapOut *o) {
+    snap_write(o, &cpu, offsetof(CPU6502, ctx));
+    snap_write(o, &cpu_port_dir, sizeof cpu_port_dir);
+    snap_write(o, &cpu_port_data, sizeof cpu_port_data);
+}
+
+void cpu_restore(SnapIn *i) {
+    snap_read(i, &cpu, offsetof(CPU6502, ctx));
+    snap_read(i, &cpu_port_dir, sizeof cpu_port_dir);
+    snap_read(i, &cpu_port_data, sizeof cpu_port_data);
+}

@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "cpu6502.h"
+#include "snapshot.h"
 
 void drive_init(void);
 void drive_reset(void);
@@ -66,5 +67,12 @@ unsigned drive_head_bit(void);
 bool drive_sync(void);
 uint8_t drive_read_byte(void);
 void drive_set_halftrack(int halftrack);
+
+// Save-state: the 2 KB drive RAM (holds any uploaded fastloader code), the drive's
+// 6502 core data fields, both VIAs, the IEC external pulls, motor/stepper/head
+// state, and the clock accumulators, so a mid-load snapshot resumes the transfer.
+// The DOS ROM and the mounted disk image are reloaded separately.
+void drive_snapshot(SnapOut *o);
+void drive_restore(SnapIn *i);
 
 #endif // DRIVE_H

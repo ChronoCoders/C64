@@ -5,6 +5,7 @@
 
 #include "cia.h"
 #include "cpu.h"
+#include "snapshot.h"
 
 // The 64 KB RAM underlies the whole map. ROM is a read overlay banked in per the
 // configuration; writes always fall through to the RAM beneath.
@@ -166,3 +167,6 @@ bool mem_load_rom(MemRomId which, const char *path) {
     }
     return true;
 }
+
+void mem_snapshot(SnapOut *o) { snap_write(o, ram, sizeof ram); }
+void mem_restore(SnapIn *i) { snap_read(i, ram, sizeof ram); }

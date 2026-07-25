@@ -114,3 +114,21 @@ void bus_write(uint16_t addr, uint8_t val) {
     }
     mem_banked_write(addr, val);
 }
+
+void bus_snapshot(SnapOut *o) {
+    snap_write(o, &bus_ba, sizeof bus_ba);
+    snap_write(o, &bus_aec, sizeof bus_aec);
+    snap_write(o, &bus_irq, sizeof bus_irq);
+    snap_write(o, &bus_nmi, sizeof bus_nmi);
+    snap_write(o, &irq_sources, sizeof irq_sources);
+    snap_write(o, &nmi_sources, sizeof nmi_sources);
+}
+
+void bus_restore(SnapIn *i) {
+    snap_read(i, &bus_ba, sizeof bus_ba);
+    snap_read(i, &bus_aec, sizeof bus_aec);
+    snap_read(i, &bus_irq, sizeof bus_irq);
+    snap_read(i, &bus_nmi, sizeof bus_nmi);
+    snap_read(i, &irq_sources, sizeof irq_sources);
+    snap_read(i, &nmi_sources, sizeof nmi_sources);
+}

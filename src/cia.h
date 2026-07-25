@@ -13,6 +13,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "snapshot.h"
+
 void cia_init(void);
 void cia_reset(void);
 void cia_clock(void);  // advance both CIAs exactly one phi2 cycle
@@ -46,5 +48,10 @@ void cia_tod_tick(unsigned n);            // n selects the CIA (0=CIA1, 1=CIA2)
 void cia_iec_device_pull(uint8_t mask);
 uint8_t cia2_iec_out(void);  // the IEC lines the C64 pulls low (Phase 6c drive bus)
 uint8_t cia2_vic_bank(void);
+
+// Save-state: both CIAs in full (timers, TOD, ICR, serial) plus the keyboard-matrix
+// and joystick input pins and the IEC device-pull latch.
+void cia_snapshot(SnapOut *o);
+void cia_restore(SnapIn *i);
 
 #endif // CIA_H

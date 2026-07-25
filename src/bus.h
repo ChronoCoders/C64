@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+#include "snapshot.h"
+
 uint8_t bus_read(uint16_t addr);
 void bus_write(uint16_t addr, uint8_t val);
 
@@ -27,5 +29,9 @@ void bus_irq_set(uint8_t source, bool asserted);
 #define BUS_NMI_CIA2 0x01u
 #define BUS_NMI_RESTORE 0x02u
 void bus_nmi_set(uint8_t source, bool asserted);
+
+// Save-state: the four inter-chip signal lines and the IRQ/NMI source masks.
+void bus_snapshot(SnapOut *o);
+void bus_restore(SnapIn *i);
 
 #endif // BUS_H

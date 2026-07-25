@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "snapshot.h"
+
 typedef enum {
     MEM_RAM,
     MEM_BASIC,
@@ -61,5 +63,9 @@ void mem_banked_write(uint16_t addr, uint8_t val);
 // is missing or not exactly the expected size (8 KB KERNAL/BASIC, 4 KB CHAR),
 // leaving that slot cleared.
 bool mem_load_rom(MemRomId which, const char *path);
+
+// Save-state: serialize / restore the 64 KB RAM (ROMs are reloaded separately).
+void mem_snapshot(SnapOut *o);
+void mem_restore(SnapIn *i);
 
 #endif // MEM_H

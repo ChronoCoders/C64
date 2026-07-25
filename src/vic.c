@@ -815,3 +815,25 @@ void vic_color_write(uint16_t addr, uint8_t val) {
 const uint32_t *vic_framebuffer(void) { return framebuffer; }
 uint16_t vic_fb_width(void) { return VIC_FB_WIDTH; }
 uint16_t vic_fb_height(void) { return VIC_FB_HEIGHT; }
+
+// One field list drives both directions so they cannot drift. Covers the register
+// file + raster position (vic), the display state machine (vcbase/rc/display_state/
+// den_frame), border flip-flops, the XSCROLL carry, the CPU-stall grace, the IRQ
+// latch/enable, sprite DMA state, collisions, colour RAM, and the per-line buffers.
+#define VIC_SNAP_FIELDS(F)                                                     \
+    F(vic) F(color_ram) F(buffer_char) F(buffer_col) F(vcbase) F(rc)          \
+    F(display_state) F(den_frame) F(border_main) F(border_vert)               \
+    F(carry_col) F(carry_fg) F(stall_grace) F(irq_latch) F(irq_enable)        \
+    F(spr) F(coll_ss) F(coll_sb) F(line_fg) F(line_border)
+
+void vic_snapshot(SnapOut *o) {
+#define W(f) snap_write(o, &(f), sizeof(f));
+    VIC_SNAP_FIELDS(W)
+#undef W
+}
+
+void vic_restore(SnapIn *i) {
+#define R(f) snap_read(i, &(f), sizeof(f));
+    VIC_SNAP_FIELDS(R)
+#undef R
+}

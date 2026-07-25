@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "snapshot.h"
+
 void sid_init(void);
 void sid_reset(void);
 
@@ -52,5 +54,12 @@ bool sid_audio_enabled(void);
 unsigned sid_audio_read(int16_t *dst, unsigned max);  // returns samples copied
 unsigned sid_audio_available(void);
 void sid_voice_set_accumulator(unsigned v, uint32_t phase);  // test / sync reset
+
+// Save-state: the register file, per-voice oscillator/noise phase, envelope
+// generators, filter integrators, and decimating-FIR/resampler state (so audio
+// resumes without a click). The host audio ring and the audio-enable flag are not
+// serialized: the ring is drained output, the flag is host setup.
+void sid_snapshot(SnapOut *o);
+void sid_restore(SnapIn *i);
 
 #endif // SID_H

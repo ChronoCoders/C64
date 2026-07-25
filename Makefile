@@ -33,12 +33,12 @@ BIN = build/c64
 
 # Core objects without main.c or host.c (no SDL), shared by the test runner. The
 # drive is included so the drive suite links; the Lorenz runner does not call it.
-CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
 # One durable unit-test binary per subsystem, plus the Lorenz runner.
-UNIT_TESTS = mem cpu cia sid vic drive via iec gcr debug
+UNIT_TESTS = mem cpu cia sid vic drive via iec gcr debug snapshot
 UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)

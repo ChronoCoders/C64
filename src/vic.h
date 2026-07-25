@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "snapshot.h"
+
 // Region timing constants, single source of truth. One row per video standard;
 // PAL is implemented now, NTSC is a reserved slot for a later phase.
 // Source: Christian Bauer, "The MOS 6567/6569 video controller (VIC-II) and its
@@ -79,5 +81,11 @@ uint16_t vic_fb_height(void);
 // disable it: badline detection and the BA/RDY CPU stall still run, only the
 // per-cycle pixel/fetch work is skipped.
 void vic_set_render(bool on);
+
+// Save-state: the register file, raster position, and every internal display-state
+// element that affects the next frame. The framebuffer and the render-enable config
+// are not serialized (output and setup, not resumable state).
+void vic_snapshot(SnapOut *o);
+void vic_restore(SnapIn *i);
 
 #endif // VIC_H

@@ -51,3 +51,6 @@ void iec_step_frame(void) {
         drive_run_phi2(1u);
     }
 }
+
+void iec_snapshot(SnapOut *o) { snap_write(o, &iec_dirty, sizeof iec_dirty); }
+void iec_restore(SnapIn *i) { snap_read(i, &iec_dirty, sizeof iec_dirty); }

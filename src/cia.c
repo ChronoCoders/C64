@@ -642,3 +642,17 @@ void cia_reset(void) {
 }
 
 void cia_init(void) { cia_reset(); }
+
+#define CIA_SNAP_FIELDS(F) F(cia) F(kb_matrix) F(joy_pull) F(iec_dev_pull)
+
+void cia_snapshot(SnapOut *o) {
+#define W(f) snap_write(o, &(f), sizeof(f));
+    CIA_SNAP_FIELDS(W)
+#undef W
+}
+
+void cia_restore(SnapIn *i) {
+#define R(f) snap_read(i, &(f), sizeof(f));
+    CIA_SNAP_FIELDS(R)
+#undef R
+}

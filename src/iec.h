@@ -9,6 +9,8 @@
 
 #include <stdbool.h>
 
+#include "snapshot.h"
+
 // Set by the only four bytes iec_update reads: CIA2 $DD00/$DD02 (PRA/DDRA) and
 // the drive's VIA1 ORB/DDRB. iec_update's output is a pure function of those, so
 // it is skipped while this is clear. Owners set it on write; see iec_update.
@@ -17,5 +19,10 @@ extern bool iec_dirty;
 void iec_reset(void);
 void iec_update(void);      // propagate both sides' pulls across the wired-AND
 void iec_step_frame(void);  // run one C64 frame, the drive interleaved per cycle
+
+// Save-state: the recompute flag. The composed line levels themselves live in the
+// CIA and drive state and are rederived on the next update.
+void iec_snapshot(SnapOut *o);
+void iec_restore(SnapIn *i);
 
 #endif // IEC_H

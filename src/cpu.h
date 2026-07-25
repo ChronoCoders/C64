@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "cpu6502.h"
+#include "snapshot.h"
 
 extern CPU6502 cpu;            // the C64's core instance
 extern uint8_t cpu_port_dir;   // 6510 port direction register, address $0000
@@ -24,5 +25,10 @@ uint8_t cpu_halt_opcode(void);
 // A JAM/KIL opcode locked the CPU; only cpu_reset recovers. The offending
 // opcode is available via cpu_halt_opcode().
 bool cpu_jammed(void);
+
+// Save-state: the 6502 core data fields (its bus callbacks are re-bound by init,
+// not serialized) plus the $00/$01 banking port.
+void cpu_snapshot(SnapOut *o);
+void cpu_restore(SnapIn *i);
 
 #endif // CPU_H

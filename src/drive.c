@@ -1,5 +1,6 @@
 #include "drive.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -364,4 +365,27 @@ uint8_t drive_iec_out(void) {
 // ATN CA1 interrupt see this on the next tick.
 void drive_set_iec_ext(uint8_t mask) {
     iec_ext = (uint8_t)(mask & (IEC_CLK | IEC_DATA | IEC_ATN));
+}
+
+// The read-head framing state and clock accumulators, alongside drive RAM, the two
+// VIAs, and the drive 6502 (data fields only; its bus callbacks are re-bound by
+// init). One field list keeps save and restore in step.
+#define DRIVE_SNAP_FIELDS(F)                                                   \
+    F(drive_ram) F(via1) F(via2) F(iec_ext) F(head_halftrack) F(step_phase)   \
+    F(cycle_count) F(phi2_acc) F(head_bit) F(bitcell_acc) F(read_shift)        \
+    F(ones_run) F(bit_in_byte) F(sync_active) F(read_byte) F(byte_ready)       \
+    F(write_prev)
+
+void drive_snapshot(SnapOut *o) {
+    snap_write(o, &drive, offsetof(CPU6502, ctx));
+#define W(f) snap_write(o, &(f), sizeof(f));
+    DRIVE_SNAP_FIELDS(W)
+#undef W
+}
+
+void drive_restore(SnapIn *i) {
+    snap_read(i, &drive, offsetof(CPU6502, ctx));
+#define R(f) snap_read(i, &(f), sizeof(f));
+    DRIVE_SNAP_FIELDS(R)
+#undef R
 }
