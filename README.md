@@ -1,10 +1,13 @@
 # C64
 
-A cycle-accurate Commodore 64 emulator, written from scratch in C11.
+A cycle-accurate Commodore 64 and 1541 disk drive, written from scratch in C11.
 
-The whole machine is modelled cycle by cycle: a 6510 CPU, the VIC-II video chip,
-the SID 6581, two CIA 6526s, and a complete 1541 disk drive running as a second
-6502 with its own ROM, RAM, VIAs and a simulated rotating GCR surface. No
+This is two complete machines, not one. The C64 (a 6510 CPU, the VIC-II video
+chip, the SID 6581, two CIA 6526s) and the 1541 drive (a second 6502 with its own
+ROM, RAM, two VIAs, and a rotating GCR surface) each run in their own clock domain,
+modelled cycle by cycle. They talk over the real IEC serial bus: three
+open-collector lines, with the KERNAL and the drive's DOS running the LISTEN/TALK
+handshake themselves, one bit at a time. That is what makes fastloaders work. No
 emulator source was used as a reference; see [Provenance](#provenance).
 
 ## Quick start
@@ -38,12 +41,13 @@ against unit tests:
 | **SID 6581** | Oscillators, all four waveforms with combined-waveform wired-AND, hard sync, ring modulation, the noise LFSR, ADSR with the free-running rate counter (so the ADSR delay bug is reproduced), a multimode filter, and `$D418` volume-register sample playback. Anti-aliased and resampled to 44.1 kHz. |
 | **CIA 6526** (x2) | Cycle-exact timers and interrupts, the 8x8 keyboard matrix, both joystick ports, the RESTORE NMI, TOD clock, serial shift register, and the CIA2 IEC lines. |
 | **1541 drive** | A full second machine: 2 KB RAM, 16 KB DOS ROM, two 6522 VIAs, its own 1.0 MHz clock domain, and a modelled rotating GCR surface with per-zone bit rates. **Read and write**: `LOAD`, `SAVE` and `NEW` (format) all work, with changes written back to the `.d64` on clean exit. |
+| **IEC serial bus** | The three-wire link (ATN, CLK, DATA) between the C64 (CIA2) and the drive (VIA1), modelled as the real open-collector wired-AND lines. The two machines run the byte-level handshake themselves, each on its own clock, so bus timing and fastloaders behave. |
 
 ## Input
 
 | Key | Function |
 |---|---|
-| **F9** | **Joystick mode** — the cursor keys become joystick 2; Right Alt or Left Ctrl fire. Title shows `[JOY]`. |
+| **F9** | **Joystick mode**: the cursor keys become joystick 2; Right Alt or Left Ctrl fire. Title shows `[JOY]`. |
 | F10 | Warp (turbo). Runs unthrottled and mutes audio; a stock 1541 load finishes in seconds instead of ~80. |
 | F11 | Keyboard layout: symbolic (default, maps by character) or positional (authentic C64 key positions). |
 | F12 | Quit. |
@@ -104,7 +108,7 @@ files are missing and exits.
 ## Accuracy and testing
 
 ```sh
-make test        # 798 checks, fast unit suites (~2 s)
+make test        # 952 checks, fast unit suites (~2 s)
 make test-slow   # 69 checks, DOS/serial integration (~80 s)
 make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
 ```
@@ -117,7 +121,7 @@ make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
   VIC/CPU/CIA timing that alters a single pixel is caught.
 - **Per-subsystem unit tests** cite their expected values to Christian Bauer's
   VIC-II documentation, the Lorenz CIA model, or the MOS datasheets.
-- **Real software**: 23 commercial titles load, run, and are bit-identical across
+- **Real software**: commercial titles load, run, and are bit-identical across
   repeated runs.
 
 ## Known limits
@@ -125,7 +129,6 @@ make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
 Deliberate, and documented at the point in the code that approximates them:
 
 - **NTSC is not implemented.** PAL only (63 cycles/line, 312 lines).
-- **No cartridges (`.crt`) or tape.**
 - **No paddles** (`$D419`/`$D41A` read 0) and **no light pen**.
 - **SID filter cutoff is an approximation.** The register-to-Hz curve reproduces
   the 6581's known general shape over the datasheet endpoints but is not fitted
