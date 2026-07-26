@@ -18,6 +18,14 @@
 // tag byte, a u32 payload length, then the subsystem payload. On load the length is
 // checked against what the subsystem actually consumes, so any drift between the
 // save and load side of a block fails loudly instead of loading misaligned.
+//
+// SCOPE: within-platform only. Payloads are raw struct/scalar images (host byte order
+// and this compiler's struct layout), so a snapshot is portable across runs of the
+// same build, not across a different endianness or compiler ABI. All current targets
+// (x86-64 and ARM64 Linux/macOS/Windows) are little-endian, so the endianness half
+// never bites in practice; the layout half means do not exchange snapshots between a
+// gcc/clang and an MSVC build. A byte-order-explicit format could arrive later as a
+// new version tag without disturbing existing readers.
 static const char SNAP_MAGIC[8] = {'C', '6', '4', 'S', 'N', 'A', 'P', '2'};
 static const char SNAP_END[8] = {'E', 'N', 'D', 'S', 'N', 'A', 'P', '2'};
 #define SNAP_VERSION 2u

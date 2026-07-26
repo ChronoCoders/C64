@@ -1,0 +1,110 @@
+# Building
+
+Two build paths:
+
+- **Makefile** (Linux): the canonical dev build and full gate (`make`, `make test`,
+  `test-slow`, `test-cpu`, `test-asan`, `coverage`, `valgrind`, `fuzz`). Unchanged.
+- **CMake** (Linux, macOS, Windows): the portable build plus the three test tiers
+  (`make test` / `test-slow` / `test-cpu` equivalents) via CTest. The sanitizer,
+  coverage, valgrind and fuzz targets stay in the Makefile; they are Linux-only.
+
+Verification status: the CMake path is verified on **Linux x86-64**. macOS and
+Windows are **expected to build but unverified** on this project's hardware. The first
+build on clang (macOS) and MSVC (Windows) will surface compiler-specific warnings that
+have not been seen yet; build with `-DC64_WERROR=OFF` first, clean them, then re-enable.
+
+## Prerequisites
+
+- A C11 compiler (gcc, clang, or MSVC 2019+).
+- CMake 3.16 or newer.
+- SDL2 (development package). Needed only for the `c64` GUI binary; the tests and the
+  Lorenz runner build without it.
+
+## ROMs (not shipped)
+
+The KERNAL, BASIC, CHARGEN and 1541 DOS ROMs are copyrighted and are not in the repo.
+Place your own legally obtained copies before running the emulator or the drive/iec
+suites:
+
+```
+rom/kernal.rom    8192 bytes
+rom/basic.rom     8192 bytes
+rom/chargen.rom   4096 bytes
+rom/1541.rom     16384 bytes
+```
+
+Run `./c64` with no ROMs present for the exact filenames and sizes it expects.
+
+## Linux (verified)
+
+```sh
+sudo apt install libsdl2-dev cmake        # or the distro equivalent
+cmake -B build
+cmake --build build -j
+ctest --test-dir build                    # unit suites (fast group)
+ctest --test-dir build -L slow            # DOS/serial integration group
+./build/c64 --disk games/some.d64         # run
+```
+
+## macOS (expected to build, unverified)
+
+```sh
+brew install sdl2 cmake
+cmake -B build -DC64_WERROR=OFF           # first pass: collect clang warnings
+cmake --build build -j
+ctest --test-dir build
+```
+
+`find_package(SDL2)` locates the Homebrew package. Expect a small set of clang
+`-Wall -Wextra` warnings that gcc does not emit; fix them, then drop `-DC64_WERROR=OFF`.
+Entry point is handled in-process (`SDL_SetMainReady`), so no `SDL2main` linkage is
+needed.
+
+## Windows, MSYS2 / MinGW (expected to build, unverified)
+
+From an MSYS2 MinGW64 shell:
+
+```sh
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-SDL2
+cmake -B build -G "MinGW Makefiles"
+cmake --build build -j
+ctest --test-dir build
+```
+
+The build copies `SDL2.dll` next to `c64.exe` so it runs from the build tree. gcc
+warnings should match the Linux build.
+
+## Windows, native MSVC + vcpkg (expected to build, unverified)
+
+```bat
+vcpkg install sdl2:x64-windows
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake -DC64_WERROR=OFF
+cmake --build build --config Release
+ctest --test-dir build -C Release
+```
+
+`/W4` is stricter than gcc/clang and will report a batch of conversion, signed/unsigned,
+unused-parameter and unused-local warnings. Build with `-DC64_WERROR=OFF` (no `/WX`),
+clean them, then re-enable. Multi-config generator puts binaries under `build/Release/`.
+
+## CMake options
+
+- `-DC64_WERROR=ON|OFF` (default ON): treat warnings as errors (`-Werror` / `/WX`).
+- `-DC64_BUILD_TESTS=ON|OFF` (default ON): build the unit suites and Lorenz runner.
+- `-DC64_DEBUG_TOOLS=ON|OFF` (default OFF): compile the bus-watchpoint / snapshot hooks.
+
+## Lorenz CPU-conformance suite
+
+Built as `lorenz-runner` but not a default CTest (the suite files under `test/lorenz/`
+are gitignored and usually absent; the runner exits non-zero without them). See
+`test/lorenz/PROVENANCE.md`. Run it directly once the suite is in place:
+
+```sh
+./build/lorenz-runner                     # or ./build/Release/lorenz-runner on MSVC
+```
+
+## Notes
+
+- Snapshots (save-states) are within-platform only: raw struct images in host byte
+  order and this compiler's layout. They resume in the same build, not across a
+  different endianness or compiler ABI. See the header of `src/snapshot.c`.

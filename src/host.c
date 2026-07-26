@@ -87,6 +87,9 @@ bool host_init(int width, int height, int scale, const char *title) {
     if (scale < HOST_SCALE_MIN || scale > HOST_SCALE_MAX) {
         return false;  // caller validates and reports; never silently clamped
     }
+    // We own main() (SDL_MAIN_HANDLED); tell SDL the entry point is ready so
+    // SDL_Init succeeds on macOS and Windows without linking SDL2main. No-op on Linux.
+    SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         return false;
     }

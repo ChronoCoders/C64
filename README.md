@@ -105,6 +105,10 @@ Open ROMs are a copyright-clean alternative that boots but will not run all
 software. Without the ROMs the build still succeeds; the binary reports which
 files are missing and exits.
 
+If you downloaded a binary release rather than the source, [ROMS.md](ROMS.md) has
+this same list and the steps to obtain the files. It is the first thing to do
+before the emulator will run.
+
 ## Accuracy and testing
 
 ```sh
