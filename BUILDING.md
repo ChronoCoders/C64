@@ -8,10 +8,12 @@ Two build paths:
   (`make test` / `test-slow` / `test-cpu` equivalents) via CTest. The sanitizer,
   coverage, valgrind and fuzz targets stay in the Makefile; they are Linux-only.
 
-Verification status: the CMake path is verified on **Linux x86-64**. macOS and
-Windows are **expected to build but unverified** on this project's hardware. The first
-build on clang (macOS) and MSVC (Windows) will surface compiler-specific warnings that
-have not been seen yet; build with `-DC64_WERROR=OFF` first, clean them, then re-enable.
+Verification status: the CMake path is verified on **Linux x86-64** and
+**Windows (MSYS2 MinGW64)**; the exact toolchains are listed under each section.
+**macOS** and **native MSVC** are expected to build but are not yet verified on this
+project's hardware. On those two, the first build with clang (macOS) or MSVC may surface
+compiler-specific warnings; build with `-DC64_WERROR=OFF` first, clean them, then
+re-enable.
 
 ## Prerequisites
 
@@ -60,19 +62,29 @@ ctest --test-dir build
 Entry point is handled in-process (`SDL_SetMainReady`), so no `SDL2main` linkage is
 needed.
 
-## Windows, MSYS2 / MinGW (expected to build, unverified)
+## Windows, MSYS2 / MinGW64 (verified)
 
 From an MSYS2 MinGW64 shell:
 
 ```sh
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-SDL2
-cmake -B build -G "MinGW Makefiles"
-cmake --build build -j
+pacman -S --needed git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
+  mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2
+cmake -S . -B build -G Ninja
+cmake --build build
 ctest --test-dir build
 ```
 
-The build copies `SDL2.dll` next to `c64.exe` so it runs from the build tree. gcc
-warnings should match the Linux build.
+The build copies `SDL2.dll` next to `c64.exe` so it runs from the build tree.
+
+Verified on this toolchain: configure and build produced **zero warnings with
+`-DC64_WERROR=ON`**, `ctest` passed **13/13** (mem, cpu, cia, sid, vic, drive, via, iec,
+gcr, debug, snapshot, plus the drive/iec slow groups) in ~57s, and `c64.exe` opened a
+window and mounted a `.d64`.
+
+- gcc 16.1.0 (Rev5, MSYS2 project)
+- cmake 4.4.0
+- ninja 1.13.2
+- SDL2 2.32.10
 
 ## Windows, native MSVC + vcpkg (expected to build, unverified)
 
