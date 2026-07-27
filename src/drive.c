@@ -98,17 +98,38 @@ static void compose_via2_ports(void) {
 }
 
 // Decode the VIA2 stepper: cycling PB0-1 through the phase sequence walks the
-// head one half-track per phase step, forward or back. There is no surface yet,
-// so this only tracks position. Source: 1541 schematic stepper wiring.
+// head one half-track per phase step, forward or back. Source: 1541 schematic
+// stepper wiring.
+//
+// head_bit is a bit index into the current track's GCR ring, but the ring length
+// (bits per revolution) differs by density zone. The disk keeps turning during a
+// radial seek, so the angular position is physically continuous across it: on a
+// track change that crosses a zone boundary we rescale head_bit by the length
+// ratio so the same angle keeps the same fraction of a revolution. Within a zone
+// the ratio is 1 (no-op). Round-to-nearest; the read loop re-frames on the next
+// SYNC so any sub-bit rounding cannot misalign a sector.
 static void update_stepper(void) {
     uint8_t phase = (uint8_t)(via2.orb & via2.ddrb & 0x03u);
     uint8_t diff = (uint8_t)((phase - step_phase) & 0x03u);
+    int old_halftrack = head_halftrack;
     if (diff == 1) {
         if (head_halftrack < 83) { head_halftrack++; }
     } else if (diff == 3) {
         if (head_halftrack > 0) { head_halftrack--; }
     }
     step_phase = phase;
+    unsigned old_track = (unsigned)(old_halftrack / 2) + 1u;
+    unsigned new_track = (unsigned)(head_halftrack / 2) + 1u;
+    if (new_track != old_track) {
+        unsigned old_nbits = 0, new_nbits = 0;
+        disk_track_gcr(old_track, &old_nbits);
+        disk_track_gcr(new_track, &new_nbits);
+        if (old_nbits != 0u && new_nbits != 0u && old_nbits != new_nbits) {
+            head_bit = (unsigned)(((uint64_t)head_bit * new_nbits + old_nbits / 2u) /
+                                  old_nbits);
+            if (head_bit >= new_nbits) { head_bit = new_nbits - 1u; }
+        }
+    }
 }
 
 static uint8_t drive_read(void *ctx, uint16_t addr) {
