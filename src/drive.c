@@ -59,7 +59,7 @@ static uint64_t phi2_acc;
 // to VIA2 PB7 (active low). The bit-cell rate is per zone. Sources: 1541 schematic
 // read electronics (UE7 bit counter, UD3 shift register) and the disk format.
 static unsigned head_bit;      // bit index into the current track's GCR ring
-static unsigned bitcell_acc;   // accumulator in 16 MHz units for bit-cell timing
+static unsigned bitcell_acc;   // bit-cell accumulator, nbits per 200000-cycle rev
 static uint32_t read_shift;    // bits shifted in, for byte assembly and SYNC
 static unsigned ones_run;      // consecutive one-bits seen (SYNC when >= 10)
 static unsigned bit_in_byte;   // bits accumulated toward the current GCR byte
@@ -271,10 +271,11 @@ static void disk_head_step(void) {
     bool write_mode = (via2.ddra == 0xFFu);  // Port A all-outputs: the DOS is writing
     if (write_mode && !write_prev) { bit_in_byte = 0; }  // fresh byte framing on entry
     write_prev = write_mode;
-    unsigned divisor = disk_track_byte_cycles(track) * 2u;
-    bitcell_acc += 16u;
-    while (bitcell_acc >= divisor) {
-        bitcell_acc -= divisor;
+    // nbits bit-cells per exactly 200000 drive cycles: every zone's revolution
+    // is exactly 200000 cycles, so the head angle never drifts.
+    bitcell_acc += nbits;
+    while (bitcell_acc >= 200000u) {
+        bitcell_acc -= 200000u;
         head_bit++;
         if (head_bit >= nbits) { head_bit = 0; }
         if (write_mode) {
