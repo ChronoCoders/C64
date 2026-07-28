@@ -10,6 +10,8 @@ open-collector lines, with the KERNAL and the drive's DOS running the LISTEN/TAL
 handshake themselves, one bit at a time. That is what makes fastloaders work. No
 emulator source was used as a reference; see [Provenance](#provenance).
 
+Design notes on how the emulator works and why it makes its choices are in [docs/](docs/README.md).
+
 ## Quick start
 
 ```sh
