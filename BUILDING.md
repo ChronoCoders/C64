@@ -4,20 +4,16 @@ Two build paths:
 
 - **Makefile** (Linux): the canonical dev build and full gate (`make`, `make test`,
   `test-slow`, `test-cpu`, `test-asan`, `coverage`, `valgrind`, `fuzz`). Unchanged.
-- **CMake** (Linux, macOS, Windows): the portable build plus the three test tiers
+- **CMake** (Linux, Windows): the portable build plus the three test tiers
   (`make test` / `test-slow` / `test-cpu` equivalents) via CTest. The sanitizer,
   coverage, valgrind and fuzz targets stay in the Makefile; they are Linux-only.
 
-Verification status: the CMake path is verified on **Linux x86-64** and
-**Windows (MSYS2 MinGW64)**; the exact toolchains are listed under each section.
-**macOS** and **native MSVC** are expected to build but are not yet verified on this
-project's hardware. On those two, the first build with clang (macOS) or MSVC may surface
-compiler-specific warnings; build with `-DC64_WERROR=OFF` first, clean them, then
-re-enable.
+Supported platforms: **Linux x86-64** and **Windows x86-64 (MSYS2 MinGW64)**, both
+verified. The exact toolchains are listed under each section.
 
 ## Prerequisites
 
-- A C11 compiler (gcc, clang, or MSVC 2019+).
+- A C11 compiler: gcc on Linux, MinGW-w64 gcc on Windows.
 - CMake 3.16 or newer.
 - SDL2 (development package). Needed only for the `c64` GUI binary; the tests and the
   Lorenz runner build without it.
@@ -48,20 +44,6 @@ ctest --test-dir build -L slow            # DOS/serial integration group
 ./build/c64 --disk games/some.d64         # run
 ```
 
-## macOS (expected to build, unverified)
-
-```sh
-brew install sdl2 cmake
-cmake -B build -DC64_WERROR=OFF           # first pass: collect clang warnings
-cmake --build build -j
-ctest --test-dir build
-```
-
-`find_package(SDL2)` locates the Homebrew package. Expect a small set of clang
-`-Wall -Wextra` warnings that gcc does not emit; fix them, then drop `-DC64_WERROR=OFF`.
-Entry point is handled in-process (`SDL_SetMainReady`), so no `SDL2main` linkage is
-needed.
-
 ## Windows, MSYS2 / MinGW64 (verified)
 
 From an MSYS2 MinGW64 shell:
@@ -86,22 +68,9 @@ window and mounted a `.d64`.
 - ninja 1.13.2
 - SDL2 2.32.10
 
-## Windows, native MSVC + vcpkg (expected to build, unverified)
-
-```bat
-vcpkg install sdl2:x64-windows
-cmake -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake -DC64_WERROR=OFF
-cmake --build build --config Release
-ctest --test-dir build -C Release
-```
-
-`/W4` is stricter than gcc/clang and will report a batch of conversion, signed/unsigned,
-unused-parameter and unused-local warnings. Build with `-DC64_WERROR=OFF` (no `/WX`),
-clean them, then re-enable. Multi-config generator puts binaries under `build/Release/`.
-
 ## CMake options
 
-- `-DC64_WERROR=ON|OFF` (default ON): treat warnings as errors (`-Werror` / `/WX`).
+- `-DC64_WERROR=ON|OFF` (default ON): treat warnings as errors (`-Werror`).
 - `-DC64_BUILD_TESTS=ON|OFF` (default ON): build the unit suites and Lorenz runner.
 - `-DC64_DEBUG_TOOLS=ON|OFF` (default OFF): compile the bus-watchpoint / snapshot hooks.
 
@@ -112,7 +81,7 @@ are gitignored and usually absent; the runner exits non-zero without them). See
 `test/lorenz/PROVENANCE.md`. Run it directly once the suite is in place:
 
 ```sh
-./build/lorenz-runner                     # or ./build/Release/lorenz-runner on MSVC
+./build/lorenz-runner
 ```
 
 ## Notes
