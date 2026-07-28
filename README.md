@@ -49,7 +49,7 @@ against unit tests:
 
 | Key | Function |
 |---|---|
-| **F8** | **Joystick port**: swap between port 2 (default) and port 1. Title shows `[JOY2]` or `[JOY1]`. Most games use port 2; a few read port 1 (Boulder Dash, 1942). |
+| **F8** | **Joystick port**: swap between port 2 (default) and port 1. Title shows `[JOY2]` or `[JOY1]`. Most games use port 2; some read port 1. |
 | **F9** | **Joystick mode**: the cursor keys become the joystick; Right Alt or Left Ctrl fire. Title adds `CRSR`. |
 | F10 | Warp (turbo). Runs unthrottled and mutes audio; a stock 1541 load finishes in seconds instead of ~80. |
 | F11 | Keyboard layout: symbolic (default, maps by character) or positional (authentic C64 key positions). |
@@ -68,8 +68,8 @@ C64 keys that are not obvious:
 **Joystick**: a connected game controller, or the numpad (`8/2/4/6` for directions,
 `0` for fire), or **F9** plus the cursor keys. Right Ctrl always fires. F9 exists
 because most laptops have no numpad. The joystick drives **port 2** by default, which
-nearly every game uses; a few titles read **port 1** (Boulder Dash and 1942, both
-measured), so press **F8** to switch ports. The active port shows in the title bar.
+nearly every game uses; some titles read **port 1**, so press **F8** to switch
+ports. The active port shows in the title bar.
 
 Command line:
 
