@@ -77,7 +77,8 @@ static const KeyMap KEY_POS[] = {
 };
 static bool symbolic_mode = true;  // symbolic is the friendly default; F11 toggles
 static bool warp_mode;             // F10 toggles unthrottled (turbo) emulation
-static bool joy_mode;              // F9 routes the cursor keys to joystick 2 instead
+static bool joy_mode;              // F9 routes the cursor keys to the joystick instead
+static unsigned joy_port = 1;      // F8 swaps the port: 1 = joystick 2 (Port A, default), 0 = joystick 1 (Port B)
 static char base_title[64];        // window title, for appending the [WARP]/[JOY] tags
 
 #define LSHIFT_ROW 1u
@@ -134,8 +135,8 @@ void host_present(const uint32_t *framebuffer) {
 
 static void update_title(void) {
     char t[96];
-    SDL_snprintf(t, sizeof(t), "%s%s%s", base_title, warp_mode ? " [WARP]" : "",
-                 joy_mode ? " [JOY]" : "");
+    SDL_snprintf(t, sizeof(t), "%s%s%s%s", base_title, warp_mode ? " [WARP]" : "",
+                 joy_port == 0 ? " [JOY1]" : " [JOY2]", joy_mode ? " CRSR" : "");
     SDL_SetWindowTitle(window, t);
 }
 
@@ -197,7 +198,8 @@ static void apply_key(SDL_Scancode sc, SDL_Keycode kc, bool down) {
     }
 }
 
-// Joystick 2 (Port A): a game controller if present, else the numpad as a
+// The keyboard/pad joystick drives the port selected by joy_port (F8 swaps it,
+// default port 2 / Port A): a game controller if present, else the numpad as a
 // keyboard fallback (8/2/4/6 = up/down/left/right, KP_0 or Right-Ctrl = fire).
 static void poll_joystick(void) {
     const Uint8 *ks = SDL_GetKeyboardState(NULL);
@@ -227,7 +229,7 @@ static void poll_joystick(void) {
         if (ax < -8000) mask |= 0x04;
         if (ax > 8000) mask |= 0x08;
     }
-    cia_joy_set(1, mask);  // joystick 2 on Port A
+    cia_joy_set(joy_port, mask);  // the selected port (F8 swaps port 2 / port 1)
 }
 
 bool host_poll(void) {
@@ -248,9 +250,14 @@ bool host_poll(void) {
             update_title();
         } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F9 &&
                    !e.key.repeat) {
-            joy_mode = !joy_mode;  // host control (F9 = cursor keys as joystick 2)
+            joy_mode = !joy_mode;  // host control (F9 = cursor keys as the joystick)
             cia_key_reset();       // drop held keys so none stick across modes
-            cia_joy_set(1, 0);
+            cia_joy_set(0, 0); cia_joy_set(1, 0);  // release both so nothing sticks
+            update_title();
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F8 &&
+                   !e.key.repeat) {
+            cia_joy_set(joy_port, 0);  // release the port we are leaving
+            joy_port ^= 1u;            // host control (F8 = swap joystick port 2 <-> 1)
             update_title();
         } else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
             apply_key(e.key.keysym.scancode, e.key.keysym.sym, true);

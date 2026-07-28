@@ -299,6 +299,28 @@ static void test_joystick2_read_with_port_a_as_output(void) {
     cia_joy_set(1, 0);
 }
 
+// Joystick 1 sits on Port B, read as inputs (DDRB=$00). The F8 host toggle routes
+// the keyboard joystick here via cia_joy_set(0, ...); this pins that path so the
+// port-1 mechanism has coverage even though host.c stays untested. With no matrix
+// row driven low (PRA=$FF), only the joystick pulls Port B.
+// Source: C64 hardware; joystick 1 grounds Port B bits 0..4.
+static void test_joystick1_read_on_port_b(void) {
+    static const char *const NAME[5] = {"up", "down", "left", "right", "fire"};
+    cia_init();
+    cia1_write(DDRA, 0xFF);
+    cia1_write(PRA, 0xFF);   // no keyboard row driven low
+    cia1_write(DDRB, 0x00);  // Port B as inputs (joystick read)
+    for (unsigned bit = 0; bit < 5u; bit++) {
+        cia_joy_set(0, (uint8_t)(1u << bit));
+        CHECK_EQ(cia1_read(PRB) & (1u << bit), 0, NAME[bit]);
+        cia_joy_set(0, 0);
+        CHECK_EQ(cia1_read(PRB) & (1u << bit), (int)(1u << bit), "released reads high");
+    }
+    cia_joy_set(0, 0x1F);  // all five at once
+    CHECK_EQ(cia1_read(PRB) & 0x1F, 0, "all joystick 1 switches pull Port B together");
+    cia_joy_set(0, 0);
+}
+
 // RESTORE is wired to the NMI line, not the keyboard matrix.
 static void test_restore_is_nmi(void) {
     cia_init();
@@ -404,6 +426,7 @@ int main(void) {
     test_keyboard_matrix();
     test_keyboard_joystick_sharing();
     test_joystick2_read_with_port_a_as_output();
+    test_joystick1_read_on_port_b();
     test_restore_is_nmi();
     test_tod_chain_and_latch();
     test_serial_shift();
