@@ -170,6 +170,10 @@ static void apply_key(SDL_Scancode sc, SDL_Keycode kc, bool down) {
         case SDL_SCANCODE_RIGHT: cia_key_set(0, 2, down); return;
         case SDL_SCANCODE_DOWN: cia_key_set(0, 7, down); return;
         case SDL_SCANCODE_RETURN: cia_key_set(0, 1, down); return;
+        case SDL_SCANCODE_F1: cia_key_set(0, 4, down); return;  // C64 F1 (Shift = F2)
+        case SDL_SCANCODE_F3: cia_key_set(0, 5, down); return;  // C64 F3 (Shift = F4)
+        case SDL_SCANCODE_F5: cia_key_set(0, 6, down); return;  // C64 F5 (Shift = F6)
+        case SDL_SCANCODE_F7: cia_key_set(0, 3, down); return;  // C64 F7 (Shift = F8)
         case SDL_SCANCODE_SPACE: cia_key_set(7, 4, down); return;
         case SDL_SCANCODE_LSHIFT: cia_key_set(1, 7, down); return;
         case SDL_SCANCODE_RSHIFT: cia_key_set(6, 4, down); return;

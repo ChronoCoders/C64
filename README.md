@@ -64,6 +64,7 @@ C64 keys that are not obvious:
 | Commodore | `Left Alt` or `Left Meta` |
 | RESTORE | `Page Up` |
 | INS/DEL | `Backspace` |
+| F1 / F3 / F5 / F7 | `F1` / `F3` / `F5` / `F7` (add `Shift` for F2 / F4 / F6 / F8) |
 
 **Joystick**: a connected game controller, or the numpad (`8/2/4/6` for directions,
 `0` for fire), or **F9** plus the cursor keys. Right Ctrl always fires. F9 exists
