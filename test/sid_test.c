@@ -3,9 +3,9 @@
 //! Every expected value is sourced from an independent (non-reSID) reference and
 //! cited at its assertion: the 6581 datasheet, Asger Alstrup Nielsen's noise
 //! waveform analysis, or Laurent Plogue's 6581R3 ADSR tables. The analog filter
-//! cutoff curve is an explicit approximation in src/sid.c and is NOT asserted as
-//! measured truth; only the datasheet cutoff-range ENDPOINTS and the exact
-//! digital control path (routing, 3OFF, volume DAC scaling) are checked.
+//! cutoff curve is Antti Lankila's averaged measured 6581 curve (src/sid.c); the
+//! tests assert its measured endpoints and one of its backward-step discontinuities,
+//! plus the exact digital control path (routing, 3OFF, volume DAC scaling).
 //!
 //! Integer assertions only; no floating point.
 #include <stdbool.h>
@@ -232,8 +232,9 @@ static void setup_loud_voice(uint16_t ctrl_addr, uint16_t ad_addr, uint16_t sr_a
     }
 }
 
-// Test 8: Filter digital control path (exact; the analog cutoff curve is not
-// asserted). Source: 6581 datasheet register decode and 30 Hz..12 kHz cutoff range.
+// Test 8: Filter digital control path (exact) plus the measured cutoff curve's
+// endpoints and a discontinuity. Source: 6581 datasheet register decode; the cutoff
+// map is Lankila's averaged measured curve (see src/sid.c filter_fc_to_hz).
 static void test_filter_digital_control_path(void) {
     // Routing $D417 low nibble: a routed voice leaves the direct sum and enters
     // the filtered sum. Datasheet register decode.
@@ -251,16 +252,24 @@ static void test_filter_digital_control_path(void) {
     CHECK_EQ(sid_direct_output(), 0, "routed voice is removed from the direct path");
     CHECK(sid_filter_output() != 0, "routed voice enters the filtered path");
 
-    // Cutoff endpoints ONLY (datasheet 30 Hz..12 kHz range). Intermediate Hz values
-    // are an explicit approximation and are not asserted.
+    // Measured cutoff curve (Lankila averaged 6581): endpoints and a discontinuity.
+    // FC 0 -> 256 Hz; FC 2040..2047 clamp to the top node 23151 Hz; the real
+    // backward step at FC 1024 (node 1016 = 1975 Hz -> node 1024 = 1342 Hz).
     sid_reset();
     sid_write(R_FC_LO, 0x00u);
     sid_write(R_FC_HI, 0x00u);  // cutoff code 0
-    CHECK_EQ(sid_filter_cutoff_hz(), 30u, "cutoff code 0 maps to the datasheet 30 Hz endpoint");
+    CHECK_EQ(sid_filter_cutoff_hz(), 256u, "cutoff code 0 maps to the measured 256 Hz node");
     sid_write(R_FC_LO, 0x07u);
-    sid_write(R_FC_HI, 0xFFu);  // cutoff code 2047
-    CHECK_EQ(sid_filter_cutoff_hz(), 12000u,
-             "cutoff code 2047 maps to the datasheet 12000 Hz endpoint");
+    sid_write(R_FC_HI, 0xFFu);  // cutoff code 2047 (past the last node, FC 2040)
+    CHECK_EQ(sid_filter_cutoff_hz(), 23151u,
+             "cutoff code 2047 clamps to the measured top node 23151 Hz");
+    sid_write(R_FC_LO, 0x00u);
+    sid_write(R_FC_HI, (uint8_t)(1016u >> 3));  // FC 1016, node before the step
+    CHECK_EQ(sid_filter_cutoff_hz(), 1975u,
+             "FC 1016 is the measured node before the FC 1024 backward step");
+    sid_write(R_FC_HI, (uint8_t)(1024u >> 3));  // FC 1024, node after the step
+    CHECK_EQ(sid_filter_cutoff_hz(), 1342u,
+             "FC 1024 steps backward to the measured 1342 Hz node (preserved, not smoothed)");
 
     // 3OFF ($D418 bit7): voice2 removed from the direct path. Datasheet decode.
     sid_reset();
@@ -329,7 +338,7 @@ static void test_adsr_delay_bug_stall(void) {
 // filter modes plus a combined notch. FNV-1a over the output sample stream. This
 // pins the filter's sample output so a change to the filter arithmetic cannot
 // silently alter the sound. The routed sum swings both sides of zero, so it
-// exercises the sid.c:398 shift path directly.
+// exercises the signed-sum shift path directly.
 #define MODE_LP 0x10u
 #define MODE_BP 0x20u
 #define MODE_HP 0x40u
@@ -370,12 +379,12 @@ static uint64_t filter_audio_hash(void) {
 }
 
 // The filter's output sample stream is bit-identical to the value measured from
-// this implementation. The expected hash is the SAME before and after the
-// sid.c:398 unsigned-shift fix (a type correction for undefined behavior, not a
-// change in behavior), proving the fix altered no audio. This pins the filter
-// arithmetic so a change to it cannot silently alter the sound.
+// this implementation. The hash is re-baselined to the Lankila averaged measured
+// cutoff curve (it changed from the old plausible-shape cubic, as expected), and
+// pins the filter arithmetic plus the cutoff map so a change cannot silently alter
+// the sound.
 static void test_filter_audio_bit_identical(void) {
-    CHECK_EQ((long long)filter_audio_hash(), (long long)0xfa8275ba906e3588ULL,
+    CHECK_EQ((long long)filter_audio_hash(), (long long)0xB3FD631256424E24ULL,
              "filter output stream matches the measured bit-identical hash");
 }
 

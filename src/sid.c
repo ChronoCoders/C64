@@ -119,15 +119,15 @@ static Env env[3];
 // The digital control path (routing $D417, mode/volume $D418, cutoff/resonance
 // decode, which modes sum) is exact. The analog response is an approximate
 // fixed-point model, not bit-exact. Datasheet-sourced facts (independent of
-// reSID): the cutoff range 30 Hz..~12 kHz (2200 pF caps), the register layout,
-// and the resonance range (linear 0..15) are from the MOS 6581 datasheet.
-// invariant: the cutoff register->Hz map is a PLAUSIBLE-SHAPE APPROXIMATION, not
-//   a measured curve. The datasheet idealizes FC as linear; the real 6581 is
-//   strongly non-linear (nearly closed at low FC, then a steep rise) and varies
-//   widely chip to chip. The cubic here reproduces that KNOWN GENERAL SHAPE over
-//   the datasheet endpoints. It is NOT fitted to any measured per-chip data and
-//   is NOT derived from reSID/reSIDfp; no independent numeric cutoff-vs-register
-//   dataset was available clean-room. Treat cutoff frequency as approximate.
+// reSID): the register layout and the resonance range (linear 0..15) are from the
+// MOS 6581 datasheet.
+// invariant: the cutoff register->Hz map is Antti Lankila's AVERAGED MEASURED 6581
+//   curve (256 points, FC 0..2040 in steps of 8), not the datasheet's idealized
+//   linear 30 Hz..12 kHz. The measured range is ~256 Hz..~23.15 kHz, strongly
+//   non-linear, with real backward steps at FC 1024/1280/1536 that are preserved
+//   exactly (they land on table nodes). It is an AVERAGE across chips (individual
+//   6581s vary widely), so measured-grounded but not per-chip exact. Not from
+//   reSID/reSIDfp. Source cited at the table (see filter_fc_to_hz).
 // invariant: the resonance nibble maps to a modest Q range (~0.7 at res 0 to
 //   ~2.0 at res 15). The datasheet gives only "linear 0..15"; the Q values are a
 //   plausible choice for the 6581's mild resonance, not measured.
@@ -146,9 +146,6 @@ static Env env[3];
 
 #define FILT_COEF_SHIFT 24      // cutoff/resonance coefficients are Q24
 #define FILT_STATE_SHIFT 6      // extra fractional bits on the integrator states
-#define FILT_CUTOFF_MIN 30      // Hz at FC=0 (datasheet)
-#define FILT_CUTOFF_SPAN 11970  // Hz added by FC=2047 -> ~12 kHz (datasheet)
-#define FILT_FC_MAX 2047u
 // f coefficient (Q24) per Hz: 2*pi*2^24 / PAL phi2 (985248); sin(x)~x for fc<<fs.
 #define FILT_HZ_TO_COEF 107
 // Resonance damping 1/Q (Q24): ~1.4 (res 0) down to ~0.5 (res 15), a modest peak.
@@ -392,14 +389,57 @@ static int32_t voice_audio(unsigned v) {
     return wf * (int32_t)env[v].envelope;           // apply the 8-bit envelope
 }
 
-// Cutoff curve: a cubic in the 11-bit register over the datasheet 30 Hz..12 kHz
-// range, shaped to the 6581's known general behavior (a low plateau at small FC,
-// then a steep rise near the top). See the invariant in the filter section: this
-// is a plausible-shape approximation, not fitted to measured data.
+// 6581 filter cutoff: Antti Lankila's averaged measured curve, 256 points at the
+// 11-bit FC register 0..2040 in steps of 8, cutoff in Hz. From the default dataset
+// in his type3designer tool. Measured, not idealized: the real 6581 non-linearity
+// and its backward steps at FC 1024/1280/1536 (which land on nodes) are exact. It
+// is an average across chips; individual 6581s vary widely, so not per-chip exact.
+// Source: https://bel.fi/alankila/c64-sw/fc-curves/type3designer.html (default data)
+//   https://web.archive.org/web/20220916161829/https://bel.fi/alankila/c64-sw/fc-curves/type3designer.html
+static const uint16_t lankila_6581_fc_hz[256] = {
+    256,257,264,248,253,267,262,260,
+    259,254,259,267,275,265,252,258,
+    260,253,261,268,263,260,261,256,
+    258,272,262,265,267,257,275,260,
+    265,260,268,267,270,263,271,271,
+    286,260,276,278,275,279,264,291,
+    282,284,289,297,285,297,289,288,
+    288,302,306,307,298,311,311,335,
+    309,324,312,319,324,331,324,341,
+    340,349,343,360,351,364,370,378,
+    382,394,392,393,411,413,450,446,
+    457,469,492,499,489,536,521,559,
+    528,553,563,562,603,607,633,645,
+    678,688,727,743,776,788,840,875,
+    883,905,967,1007,1039,1136,1157,1234,
+    1292,1385,1422,1577,1613,1733,1812,1975,
+    1342,1371,1485,1536,1638,1680,1788,1911,
+    1974,2057,2198,2267,2449,2582,2776,2865,
+    2878,3091,3220,3349,3550,3739,3890,4113,
+    4254,4414,4627,4856,5043,5294,5528,5807,
+    5483,5789,6016,6258,6415,6729,6898,7218,
+    7328,7634,7779,8161,8314,8568,8866,9106,
+    9247,9490,9688,9920,10199,10514,10743,11090,
+    11255,11596,11802,12046,12312,12513,12818,13100,
+    12511,12836,13022,13347,13552,13649,14055,14371,
+    14390,14706,14946,15049,15296,15565,15805,16068,
+    16156,16314,16589,16864,17123,17304,17508,17755,
+    17973,18210,18462,18723,18831,19116,19483,19583,
+    19454,19577,19865,20068,20309,20321,20522,20760,
+    20941,21191,21209,21483,21510,21687,21926,21974,
+    22119,22260,22265,22422,22441,22575,22656,22729,
+    22824,22896,22974,22989,23055,23091,23090,23151,
+};
+
+// FC register (0..2047) -> Hz: exact at each measured node (fc a multiple of 8),
+// linear interpolation over the low 3 register bits. The backward steps are node
+// values, so they are preserved, not smoothed. fc 2040..2047 clamp to the top node.
 static uint32_t filter_fc_to_hz(uint32_t fc) {
-    return (uint32_t)FILT_CUTOFF_MIN +
-           (uint32_t)(((uint64_t)FILT_CUTOFF_SPAN * fc * fc * fc) /
-                      ((uint64_t)FILT_FC_MAX * FILT_FC_MAX * FILT_FC_MAX));
+    unsigned i = fc >> 3;                 // node index 0..255
+    unsigned frac = fc & 7u;              // position between node i and i+1
+    if (i >= 255u) { return lankila_6581_fc_hz[255]; }
+    int32_t a = lankila_6581_fc_hz[i], b = lankila_6581_fc_hz[i + 1];
+    return (uint32_t)(a + ((b - a) * (int32_t)frac) / 8);
 }
 
 static void filter_update_cutoff(void) {
