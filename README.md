@@ -74,6 +74,30 @@ because most laptops have no numpad. The joystick drives **port 2** by default, 
 nearly every game uses; some titles read **port 1**, so press **F8** to switch
 ports. The active port shows in the title bar.
 
+**Game controller setup**: a controller is used only if SDL recognises it as a
+game controller (it is in SDL's controller database). Then the D-pad and left stick
+move, the A button fires, and it drives the active port (F8 swaps port 2 / port 1).
+
+1. Plug the controller in before or during a run. Prefer a pad that presents as a
+   standard USB HID gamepad; that is the mode SDL maps without extra drivers.
+2. Confirm it is seen. At startup the emulator logs one line per input device with
+   its name, GUID, and whether SDL treats it as a game controller:
+   ```
+   host: joy 0 name="..." guid=03000000....  gamecontroller=yes
+   ```
+   `gamecontroller=yes` means it will be used. `no` means SDL has no mapping for
+   that GUID, so it is ignored even though it enumerated fine.
+3. If it says `no`, supply a mapping. Take the GUID from the log, build an SDL
+   mapping string, and export it before launching, no rebuild needed:
+   ```sh
+   export SDL_GAMECONTROLLERCONFIG="03000000....,My Pad,a:b1,b:b0,dpup:h0.1,..."
+   ```
+   SDL reads that variable at init and the device then reports `gamecontroller=yes`.
+
+On Linux the controller must first appear under `/dev/input` as an event device.
+Under WSL2 a USB pad reaches Linux only after it is passed through from Windows
+(for example with `usbipd`); until then no input device exists to detect.
+
 Command line:
 
 ```
