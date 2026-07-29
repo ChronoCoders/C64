@@ -66,8 +66,8 @@ build/test-%: test/%_test.c test/test.h $(CORE_SRC)
 # every unit suite plus the fast group of the drive and iec suites. `make test-slow`
 # runs their slow group (DOS/serial integration, ~80s). `make test-cpu` runs the
 # Wolfgang Lorenz CPU-conformance suite (~14min). The union of test + test-slow is
-# the full unit suite (802 checks); test-cpu is separate (the Lorenz count is
-# reported inline, not folded into the 802 total).
+# the full unit suite (~1030 checks); test-cpu is separate (the Lorenz count is
+# reported inline, not folded into that total).
 SLOW_BINS = build/test-drive build/test-iec
 
 test: $(UNIT_BINS)

@@ -197,6 +197,10 @@ bool disk_mount_image(const uint8_t *data, size_t len) {
 
 bool disk_mount(const char *path) {
     disk_unmount();
+    // A path we cannot store cannot be written back later; reject it up front rather
+    // than mounting a disk whose SAVE would be silently dropped on exit.
+    size_t plen = strlen(path);
+    if (plen >= sizeof(mount_path)) { return false; }
     FILE *f = fopen(path, "rb");
     if (!f) { return false; }
     size_t n = fread(image, 1u, D64_STD_SIZE, f);
@@ -211,12 +215,9 @@ bool disk_mount(const char *path) {
         memcpy(error_info, err, DISK_TOTAL_SECTORS);
     }
     if (!mount_validate_and_build()) { return false; }
-    // Remember where a clean 35-track image came from, so it can be written back.
-    size_t plen = strlen(path);
-    if (plen < sizeof(mount_path)) {
-        memcpy(mount_path, path, plen + 1u);
-        clean_path = true;
-    }
+    // Remember where a clean 35-track image came from (path length checked up front).
+    memcpy(mount_path, path, plen + 1u);
+    clean_path = true;
     return true;
 }
 

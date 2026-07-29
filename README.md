@@ -118,7 +118,7 @@ before the emulator will run.
 ## Accuracy and testing
 
 ```sh
-make test        # 954 checks, fast unit suites (~2 s)
+make test        # ~965 checks, fast unit suites (~2 s)
 make test-slow   # 69 checks, DOS/serial integration (~80 s)
 make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
 ```

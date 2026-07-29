@@ -752,6 +752,18 @@ static void test_bam_near_full(void) {
     CHECK_EQ(match, 1, "the file saved into non-adjacent free space reloads identically");
 }
 
+// A path too long to store cannot be written back, so disk_mount rejects it up
+// front rather than silently mounting a disk whose SAVE would be dropped on exit.
+// Source: the disk_mount length guard against sizeof(mount_path).
+static void test_mount_rejects_overlong_path(void) {
+    static char longpath[5000];
+    memset(longpath, 'x', sizeof(longpath) - 1u);
+    longpath[sizeof(longpath) - 1u] = '\0';   // 4999 chars, past the store limit
+    CHECK_EQ(disk_mount(longpath) ? 1 : 0, 0, "an over-length path is rejected by disk_mount");
+    CHECK_EQ(disk_present() ? 1 : 0, 0, "no disk is left mounted after the rejected mount");
+    CHECK_EQ(disk_writeback() ? 1 : 0, 0, "writeback is a no-op with nothing mounted");
+}
+
 // Hardware-level unit checks: sub-second, no DOS command path.
 static void drive_fast(const char *synth) {
     test_boot_from_rom_reaches_idle(synth);
@@ -766,6 +778,7 @@ static void drive_fast(const char *synth) {
     test_byte_ready_rate_per_zone();
     test_disk_optional();
     test_d64_error_info_variant();
+    test_mount_rejects_overlong_path();
 }
 
 // DOS-integration checks (LOAD/SAVE/NEW/BAM/writeback through the GCR surface):
