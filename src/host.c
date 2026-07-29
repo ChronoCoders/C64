@@ -94,9 +94,24 @@ bool host_init(int width, int height, int scale, const char *title) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         return false;
     }
-    for (int i = 0; i < SDL_NumJoysticks() && !pad; i++) {
+    // Log every joystick index, including those SDL_IsGameController rejects: an
+    // unmapped pad enumerates fine but is skipped here, so its name/GUID is what we
+    // need to add a mapping. Diagnostic only; the open logic below is unchanged.
+    int njoy = SDL_NumJoysticks();
+    SDL_Log("host: %d joystick device(s) present", njoy);
+    for (int i = 0; i < njoy; i++) {
+        char guid[33];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid, sizeof(guid));
+        const char *name = SDL_JoystickNameForIndex(i);
+        SDL_Log("host: joy %d name=\"%s\" guid=%s gamecontroller=%s", i,
+                name ? name : "(null)", guid, SDL_IsGameController(i) ? "yes" : "no");
+    }
+    for (int i = 0; i < njoy && !pad; i++) {
         if (SDL_IsGameController(i)) {
             pad = SDL_GameControllerOpen(i);
+            if (!pad) {
+                SDL_Log("host: SDL_GameControllerOpen(%d) failed: %s", i, SDL_GetError());
+            }
         }
     }
     fb_pitch = width * (int)sizeof(uint32_t);
