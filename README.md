@@ -26,6 +26,8 @@ LOAD"*",8,1
 RUN
 ```
 
+Or let it type that for you: `./build/c64 --disk games/yourgame.d64 --autorun`.
+
 The load runs at authentic 1541 speed (slow, by design). Press **F10** for warp
 if you would rather not wait.
 
@@ -76,6 +78,7 @@ Command line:
 
 ```
 --disk <path.d64>   mount a disk on device 8
+--autorun           after boot, type LOAD"*",8,1 and RUN by itself (needs --disk)
 --headless          run with no window
 ```
 

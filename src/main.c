@@ -57,6 +57,16 @@ static bool load_roms(void) {
 // rendered at the VIC's own resolution, so this cannot affect emulation.
 static int window_scale = HOST_SCALE_DEFAULT;
 
+// --autorun: once the cold boot reaches READY, type LOAD"*",8,1 then RUN into the
+// KERNAL keyboard buffer so a mounted disk loads and starts hands-free. One key is
+// queued per frame only when the buffer is empty, which self-paces around the load
+// (the buffer holds no new keys while the DOS load runs). Only when a disk is mounted.
+#define KB_BUFFER 0x0277u          // KERNAL keyboard buffer front
+#define KB_NDX 0x00C6u             // number of keys queued in it
+#define AUTORUN_BOOT_FRAMES 150u   // wait for the cold boot to reach READY
+static const char AUTORUN_SEQ[] = "LOAD\"*\",8,1\rRUN\r";
+static bool autorun_enabled;
+
 static int run_visible(void) {
     if (!host_init(vic_fb_width(), vic_fb_height(), window_scale, WINDOW_TITLE)) {
         printf("C64: could not open a display window (%s). Is a display "
@@ -69,7 +79,18 @@ static int run_visible(void) {
         printf("C64: audio device unavailable (%s); running without sound.\n",
                host_error());
     }
+    unsigned autorun_frame = 0;
+    size_t autorun_idx = 0;
     while (!host_poll()) {
+        if (autorun_enabled && AUTORUN_SEQ[autorun_idx] != '\0') {
+            if (autorun_frame < AUTORUN_BOOT_FRAMES) {
+                autorun_frame++;                    // let the boot reach READY first
+            } else if (mem_read(KB_NDX) == 0u) {    // feed one key once the buffer drains
+                mem_write(KB_BUFFER, (uint8_t)AUTORUN_SEQ[autorun_idx]);
+                mem_write(KB_NDX, 1u);
+                autorun_idx++;
+            }
+        }
         bool warp = host_warp();  // F10: run unthrottled, many frames per presented one
         int frames = warp ? WARP_FRAMES : 1;
         for (int i = 0; i < frames; i++) {
@@ -144,9 +165,12 @@ int main(int argc, char **argv) {
     // reach the file only through disk_writeback() on a clean exit. A rejected or
     // absent image just leaves the drive empty; the machine runs normally.
     bool headless = false;
+    bool autorun = false;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) {
             headless = true;
+        } else if (strcmp(argv[i], "--autorun") == 0) {
+            autorun = true;
         } else if (strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
             const char *arg = argv[++i];
             char *end = NULL;
@@ -166,6 +190,12 @@ int main(int argc, char **argv) {
                 printf("1541: could not mount %s (missing or not a 35-track .d64).\n", path);
             }
         }
+    }
+
+    // --autorun only makes sense with a mounted disk to LOAD"*" from.
+    autorun_enabled = autorun && disk_present();
+    if (autorun && !disk_present()) {
+        printf("C64: --autorun ignored (no disk mounted; pass --disk <path.d64>).\n");
     }
 
     debug_init_from_env();
