@@ -7,6 +7,8 @@ Two build paths:
 - **CMake** (Linux, Windows): the portable build plus the three test tiers
   (`make test` / `test-slow` / `test-cpu` equivalents) via CTest. The sanitizer,
   coverage, valgrind and fuzz targets stay in the Makefile; they are Linux-only.
+  It targets gcc and MinGW-w64 gcc only; the MSVC and macOS paths were removed, so
+  the warning flags and toolchain assumptions match the two verified platforms.
 
 Supported platforms: **Linux x86-64** and **Windows x86-64 (MSYS2 MinGW64)**, both
 verified. The exact toolchains are listed under each section.
