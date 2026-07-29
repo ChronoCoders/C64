@@ -1,7 +1,7 @@
 # Cross-platform build for the C64 emulator. Mirrors the Makefile: a no-SDL
 # emulation core, an SDL2 GUI binary, the Lorenz runner, and the unit suites.
 # The Makefile stays the canonical Linux dev build; this is the portable path
-# for macOS and Windows (MSVC or MinGW), where sdl2-config and the POSIX-shell
+# for Linux and Windows (MSYS2 MinGW64), where sdl2-config and the POSIX-shell
 # recipes do not apply.
 #
 #   cmake -B build && cmake --build build          # core + GUI (if SDL2) + tests
@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 3.16)
 project(c64 LANGUAGES C)
 
 # Strict C11, no compiler extensions: matches -std=c11 (not gnu11). The core uses
-# no GCC/Clang extensions, so this holds on MSVC too.
+# no GCC extensions, so the standard build is portable, not gcc-locked.
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -26,19 +26,12 @@ option(C64_WERROR "Treat warnings as errors (project policy is zero warnings)" O
 option(C64_BUILD_TESTS "Build the unit suites and the Lorenz runner" ON)
 option(C64_DEBUG_TOOLS "Compile the bus-watchpoint / snapshot hooks in src/debug.c" OFF)
 
-# Warnings per compiler. -Werror / /WX can trip on a compiler emitting a warning
-# the code was never checked against (clang and MSVC differ from gcc); flip
-# -DC64_WERROR=OFF while porting, then clean the warnings and turn it back on.
-if(MSVC)
-  add_compile_options(/W4)
-  if(C64_WERROR)
-    add_compile_options(/WX)
-  endif()
-else()
-  add_compile_options(-Wall -Wextra)
-  if(C64_WERROR)
-    add_compile_options(-Werror)
-  endif()
+# gcc on Linux, MinGW-w64 gcc on Windows: same flags. -Werror can trip on a newer
+# gcc emitting a warning the code was never checked against; flip -DC64_WERROR=OFF
+# while porting, then clean the warnings and turn it back on.
+add_compile_options(-Wall -Wextra)
+if(C64_WERROR)
+  add_compile_options(-Werror)
 endif()
 
 # The emulation core: no SDL, no OS calls. Shared by the GUI binary and every
@@ -55,18 +48,17 @@ endif()
 
 # SDL2 GUI binary. Optional: if SDL2 is absent the tests still build, matching the
 # Makefile's "the headless test runner still builds" behaviour. find_package(SDL2)
-# is the portable discovery path (Homebrew, vcpkg, MSYS2 and apt all ship the
-# config package), replacing the Linux-only sdl2-config.
+# is the portable discovery path (MSYS2 and apt both ship the config package),
+# replacing the Linux-only sdl2-config.
 find_package(SDL2 QUIET)
 if(SDL2_FOUND OR TARGET SDL2::SDL2)
   add_executable(c64 src/main.c src/host.c)
   target_link_libraries(c64 PRIVATE c64core)
   # This program supplies its own main(). SDL_MAIN_HANDLED stops SDL from
   # redefining main / expecting an SDL_main entry, so the same plain main() links
-  # on Linux, macOS and Windows without linking SDL2main. Note: with this set, SDL
-  # wants SDL_SetMainReady() before SDL_Init on some platforms; if a window fails
-  # to open on macOS/Windows, that one call in main.c (or linking SDL2main and
-  # including <SDL.h> in main.c instead) is the lever.
+  # on Linux and Windows without linking SDL2main. Note: with this set, SDL wants
+  # SDL_SetMainReady() before SDL_Init on some platforms; the call in main.c
+  # already handles that on Windows.
   target_compile_definitions(c64 PRIVATE SDL_MAIN_HANDLED)
   if(TARGET SDL2::SDL2)
     target_link_libraries(c64 PRIVATE SDL2::SDL2)
@@ -83,7 +75,7 @@ if(SDL2_FOUND OR TARGET SDL2::SDL2)
 else()
   message(STATUS
     "SDL2 not found: skipping the 'c64' GUI binary; tests still build. "
-    "Install SDL2 (brew install sdl2 / apt install libsdl2-dev / vcpkg install sdl2).")
+    "Install SDL2 (apt install libsdl2-dev, or pacman -S mingw-w64-x86_64-SDL2).")
 endif()
 
 # Wolfgang Lorenz CPU-conformance runner. Core only, no SDL. Not registered as a
