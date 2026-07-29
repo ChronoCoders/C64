@@ -16,17 +16,17 @@ Design notes on how the emulator works and why it makes its choices are in [docs
 
 ```sh
 make MODE=release          # optimised build -> build/c64
-./build/c64 --disk games/yourgame.d64
+./build/c64 --disk games/yourgame.d64 --autorun
 ```
 
-At the `READY.` prompt:
+`--autorun` waits for the cold boot to reach `READY.`, then types `LOAD"*",8,1`
+and `RUN` for you, so a mounted disk loads and starts hands-free. Drop it to stop
+at the prompt and type them yourself:
 
 ```
 LOAD"*",8,1
 RUN
 ```
-
-Or let it type that for you: `./build/c64 --disk games/yourgame.d64 --autorun`.
 
 The load runs at authentic 1541 speed (slow, by design). Press **F10** for warp
 if you would rather not wait.
