@@ -22,6 +22,18 @@ static int fb_pitch;  // bytes per framebuffer row
 static SDL_AudioDeviceID audio_dev;
 static SDL_GameController *pad;
 
+// Audio ring: single producer (main loop via host_audio_push), single consumer
+// (SDL's audio callback thread). It decouples sample delivery from main-loop timing
+// so a render or scheduling hitch cannot starve the device into a click. Free-running
+// head/tail counters (masked only when indexing) make empty vs full unambiguous. On
+// underrun the callback holds the last sample rather than stepping to silence.
+#define AUDIO_RING 32768u            // power of two; ~0.74 s at 44.1 kHz
+#define AUDIO_RING_MASK (AUDIO_RING - 1u)
+static int16_t audio_ring[AUDIO_RING];
+static SDL_atomic_t ring_head;       // producer write count
+static SDL_atomic_t ring_tail;       // consumer read count
+static int16_t audio_last;           // last sample emitted, held across an underrun
+
 // Two host-key -> C64 matrix maps for the character keys, selectable at runtime
 // (F11 toggles). Symbolic (the default) keys off the SDL keycode, so the host
 // key that produces a letter/digit maps to that C64 letter/digit regardless of
@@ -297,14 +309,44 @@ bool host_warp(void) { return warp_mode; }
 
 const char *host_error(void) { return SDL_GetError(); }
 
+// SDL audio thread: drains the ring into the device buffer. On underrun (ring
+// empty before the request is filled) it holds the last sample, so a shortfall is a
+// brief flat hold instead of a hard step to zero that would click.
+static void audio_callback(void *userdata, Uint8 *stream, int len) {
+    (void)userdata;
+    int16_t *out = (int16_t *)stream;
+    int want = len / (int)sizeof(int16_t);
+    Uint32 head = (Uint32)SDL_AtomicGet(&ring_head);
+    Uint32 tail = (Uint32)SDL_AtomicGet(&ring_tail);
+    Uint32 avail = head - tail;
+    int n = (avail < (Uint32)want) ? (int)avail : want;
+    for (int i = 0; i < n; i++) {
+        audio_last = audio_ring[tail & AUDIO_RING_MASK];
+        out[i] = audio_last;
+        tail++;
+    }
+    for (int i = n; i < want; i++) {
+        out[i] = audio_last;  // underrun: hold, do not click to silence
+    }
+    SDL_AtomicSet(&ring_tail, (int)tail);
+}
+
 bool host_audio_init(int rate) {
     SDL_AudioSpec want, have;
     SDL_memset(&want, 0, sizeof(want));
     want.freq = rate;
     want.format = AUDIO_S16SYS;
-    want.channels = 1;      // SID is mono
-    want.samples = 1024;
-    want.callback = NULL;   // use SDL_QueueAudio from the main thread
+    want.channels = 1;             // SID is mono
+    want.samples = 2048;           // device buffer; larger tolerates transport jitter
+    const char *buf_env = SDL_getenv("C64_AUDIO_BUF");  // device buffer override
+    if (buf_env) {
+        int v = SDL_atoi(buf_env);
+        if (v >= 512 && v <= 16384) { want.samples = (Uint16)v; }
+    }
+    want.callback = audio_callback;  // pull model: the audio thread drains the ring
+    SDL_AtomicSet(&ring_head, 0);
+    SDL_AtomicSet(&ring_tail, 0);
+    audio_last = 0;
     audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (audio_dev == 0) {
         return false;
@@ -313,18 +355,31 @@ bool host_audio_init(int rate) {
     return true;
 }
 
+// Producer: append into the ring. Drops the overflow if the ring is full, which the
+// pacer below keeps from happening in steady state.
 void host_audio_push(const int16_t *samples, int count) {
-    if (audio_dev != 0 && count > 0) {
-        SDL_QueueAudio(audio_dev, samples, (Uint32)count * sizeof(int16_t));
+    if (audio_dev == 0 || count <= 0) {
+        return;
     }
+    Uint32 head = (Uint32)SDL_AtomicGet(&ring_head);
+    Uint32 tail = (Uint32)SDL_AtomicGet(&ring_tail);
+    Uint32 space = AUDIO_RING - (head - tail);
+    Uint32 n = ((Uint32)count < space) ? (Uint32)count : space;
+    for (Uint32 i = 0; i < n; i++) {
+        audio_ring[head & AUDIO_RING_MASK] = samples[i];
+        head++;
+    }
+    SDL_AtomicSet(&ring_head, (int)head);
 }
 
+// Realtime clock: block the main loop while the ring holds more than the target, so
+// the loop runs exactly as fast as the audio thread consumes (the callback drains at
+// the device rate).
 void host_audio_pace(unsigned target_samples) {
     if (audio_dev == 0) {
         return;
     }
-    Uint32 target_bytes = target_samples * (Uint32)sizeof(int16_t);
-    while (SDL_GetQueuedAudioSize(audio_dev) > target_bytes) {
+    while ((Uint32)(SDL_AtomicGet(&ring_head) - SDL_AtomicGet(&ring_tail)) > target_samples) {
         SDL_Delay(1);
     }
 }

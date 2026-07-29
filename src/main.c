@@ -79,6 +79,15 @@ static int run_visible(void) {
         printf("C64: audio device unavailable (%s); running without sound.\n",
                host_error());
     }
+    // Audio pacing cushion. The default suits capable machines; a jittery host (for
+    // example WSL2 audio) can widen it with C64_AUDIO_TARGET to trade latency for a
+    // deeper buffer against underrun.
+    unsigned audio_target = AUDIO_TARGET_SAMPLES;
+    const char *target_env = getenv("C64_AUDIO_TARGET");
+    if (target_env) {
+        long v = strtol(target_env, NULL, 10);
+        if (v > 0 && v < 100000) { audio_target = (unsigned)v; }
+    }
     unsigned autorun_frame = 0;
     size_t autorun_idx = 0;
     while (!host_poll()) {
@@ -105,7 +114,7 @@ static int run_visible(void) {
         }
         host_present(vic_framebuffer());
         if (audio && !warp) {
-            host_audio_pace(AUDIO_TARGET_SAMPLES);  // pace to audio realtime (skipped in warp)
+            host_audio_pace(audio_target);  // pace to audio realtime (skipped in warp)
         }
     }
     host_audio_shutdown();
