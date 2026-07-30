@@ -167,9 +167,11 @@ static int32_t direct_out;  // unrouted voices sum (signal units)
 // phi2-rate mix with an anti-alias FIR and decimates it to the host rate by
 // Bresenham phase accumulation, DC-blocks it (AC-coupling), and pushes 16-bit
 // samples into a ring the host drains. Producer (sid_clock) and consumer
-// (sid_audio_read) are single each; the host uses SDL's queue API from the same
-// thread as the loop, so no locking is needed. The FIR, resampling and the mix are
-// fixed-point; no floating point (the FIR coefficients are generated offline).
+// (sid_audio_read) both run on the machine-loop thread, so this ring needs no
+// locking; the host then moves those samples into its own ring that the SDL audio
+// callback drains on the audio thread (see host.c, which uses SDL_atomic there). The
+// FIR, resampling and the mix are fixed-point; no floating point (the FIR
+// coefficients are generated offline).
 // invariant: the FIR gives ~60 dB attenuation above the 24 kHz stopband, so the
 //   SID's high harmonics no longer fold back into the audible band as noise.
 #define SID_PHI2_HZ 985248u   // PAL phi2, the resampling reference rate
