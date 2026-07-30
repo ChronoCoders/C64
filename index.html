@@ -27,12 +27,10 @@
     --lgrey:    #959595;
   }
 
-  /* PetMe64 (c) Kreative Korporation / Kreative Software, used under the
-     Kreative Software Relay Fonts Free Use License v1.2f; see FreeLicense.txt */
   @font-face {
     font-family: "C64";
-    src: url('PetMe64.ttf') format('truetype'),
-         local("C64 Pro Mono");
+    src: local("Pet Me 64"), local("PetMe64"), local("C64 Pro Mono"),
+         url('fonts/PetMe64.ttf') format('truetype');
     font-display: swap;
   }
 
@@ -328,6 +326,11 @@
 
   /* CTA */
   .cta-wrap { text-align: center; }
+  .cta-wrap .btn ~ .lead {
+    margin-top: 2.4em;
+    font-size: clamp(11px, 1.5vw, 14px);
+    opacity: 0.85;
+  }
   .btn {
     display: inline-block;
     margin: 2em 10px 0;
@@ -350,7 +353,7 @@
   footer {
     background: var(--black);
     border-top: 6px solid var(--lblue);
-    padding: 40px 6vw;
+    padding: 40px 6vw 120px;
     text-align: center;
     color: var(--grey);
     font-size: clamp(11px, 1.8vw, 13px);
@@ -393,10 +396,10 @@
       <div class="hero-copy">
         <div class="hero-kicker">// A COMMODORE 64, REBUILT IN FULL</div>
         <h1 class="hero-title">The machine you grew up on, down to the <span class="accent">last cycle</span>.</h1>
-        <p class="hero-sub">Not a lookalike. The real thing, chip by chip: the computer <span class="hl">and its disk drive</span>, both running as the machines they were. Scroll down and see what that took.</p>
+        <p class="hero-sub">The computer <span class="hl">and its disk drive</span>, both rebuilt chip by chip and running as the machines they were. Scroll down and see what that took.</p>
         <div class="hero-btns">
-          <a href="https://github.com/ChronoCoders/C64" class="hero-btn">VIEW THE SOURCE</a>
-          <a href="#" class="hero-btn ghost" onclick="document.querySelector('.refs').scrollIntoView({behavior:'smooth'});return false;">EXPLORE THE MACHINE</a>
+          <a href="https://github.com/ChronoCoders/C64/releases/latest" class="hero-btn">DOWNLOAD</a>
+          <a href="https://github.com/ChronoCoders/C64" class="hero-btn ghost">VIEW THE SOURCE</a>
         </div>
       </div>
 
@@ -427,7 +430,7 @@
       <div class="eyebrow">// THE MACHINE THAT RAISED A GENERATION</div>
       <h2>You remember exactly how it felt.</h2>
       <p class="lead">The blue glow. The hum of the drive. That moment the screen lit up and the whole machine was <span class="hl">yours</span>, top to bottom, nothing hidden.</p>
-      <p class="lead">This is that machine, rebuilt in software chip by chip and cycle by cycle, until the games and the demos run <span class="hl">exactly the way they did in 1985</span>.</p>
+      <p class="lead">This is that machine, rebuilt in software chip by chip and cycle by cycle, until <span class="hl">the timing those games and demos leaned on</span> is the timing they get.</p>
     </div>
   </section>
 
@@ -519,7 +522,7 @@
             </svg>
           </div>
           <h3>THE PORTS</h3>
-          <p>Two control ports, ready for the joystick, the paddles, the light pen. Wired the way the hardware wired them, so every game finds its input right where it expects.</p>
+          <p>Two control ports with the joystick wired the way the hardware wired it, sharing the keyboard matrix the way the real machine shared it. Press F8 and the stick moves across for the games that read the other port.</p>
         </div>
       </div>
     </div>
@@ -529,13 +532,14 @@
   <section class="band-purple">
     <div class="inner">
       <div class="eyebrow">// BUILT WITH CARE</div>
-      <h2>Nothing left out. Nothing faked.</h2>
-      <p class="lead">Every part is here, doing what it always did, the way it always did it. Not <span class="hl">almost</span> right. Right.</p>
+      <h2>You can tell when it&rsquo;s wrong.</h2>
+      <p class="lead">The music sits a shade off, the border flickers where it should be still, the loader gets halfway and gives up. Anyone who grew up with this machine <span class="hl">knows that feeling in a second</span>.</p>
+      <p class="lead">Getting rid of it is what all the years went into.</p>
       <div class="stats">
+        <div class="stat"><div class="num">1982</div><div class="lbl">WHEN IT ALL STARTED</div></div>
+        <div class="stat"><div class="num">16</div><div class="lbl">COLOURS, AND YOU KNEW EVERY ONE</div></div>
+        <div class="stat"><div class="num">3</div><div class="lbl">VOICES YOU CAN STILL HUM</div></div>
         <div class="stat"><div class="num">2</div><div class="lbl">THE COMPUTER AND ITS DRIVE</div></div>
-        <div class="stat"><div class="num">64</div><div class="lbl">KILOBYTES, HONORED</div></div>
-        <div class="stat"><div class="num">1982</div><div class="lbl">FAITHFUL TO THE YEAR</div></div>
-        <div class="stat"><div class="num">&#8734;</div><div class="lbl">GAMES &amp; DEMOS AWAIT</div></div>
       </div>
     </div>
   </section>
@@ -577,15 +581,17 @@
       <div class="eyebrow">// THE BLUE SCREEN IS WAITING</div>
       <h2>Turn it on. Come home.</h2>
       <p class="lead">Boot straight into that famous blue. No desktop, no clutter, no decades in between. Just you and the machine, the way it always should have been.</p>
-      <a href="https://github.com/ChronoCoders/C64" class="btn">VIEW THE SOURCE</a>
-      <a href="#" class="btn ghost" onclick="document.querySelector('.refs').scrollIntoView({behavior:'smooth'});return false;">EXPLORE THE MACHINE</a>
+      <a href="https://github.com/ChronoCoders/C64/releases/download/v0.1.4/c64-0.1.4-windows-x86_64.zip" class="btn">WINDOWS</a>
+      <a href="https://github.com/ChronoCoders/C64/releases/download/v0.1.4/c64-0.1.4-linux-x86_64.tar.gz" class="btn">LINUX</a>
+      <a href="https://github.com/ChronoCoders/C64" class="btn ghost">VIEW THE SOURCE</a>
+      <p class="lead">You bring your own system files. The download shows you how.</p>
     </div>
   </section>
 
   <footer>
     <div class="ready-tiny">READY.</div>
-    A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; BUILT BY HAND, FOR THE LOVE OF THE CRAFT<br>
-    NOT AFFILIATED WITH COMMODORE.
+    A CYCLE-EXACT COMMODORE 64 AND 1541 EMULATOR &middot; BUILT BY HAND<br>
+    NOT AFFILIATED WITH COMMODORE &middot; TYPEFACE BY KREATIVE SOFTWARE
   </footer>
 
   <!-- SID SOUND -->
