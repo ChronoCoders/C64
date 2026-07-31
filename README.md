@@ -169,15 +169,6 @@ make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
 - **Real software**: commercial titles load, run, and are bit-identical across
   repeated runs.
 
-## Known limits
-
-Deliberate, and documented at the point in the code that approximates them:
-
-- **NTSC is not implemented.** PAL only (63 cycles/line, 312 lines).
-- **No paddles** (`$D419`/`$D41A` read 0) and **no light pen**.
-- **No copy protection support**: images relying on custom formatting or weak
-  bits will not load.
-
 ## Provenance
 
 Written from scratch. No code, structure or tables were taken from reSID, VICE or
