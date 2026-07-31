@@ -106,6 +106,14 @@ Command line:
 --headless          run with no window
 ```
 
+Environment (audio tuning, optional):
+
+```
+C64_AUDIO_BUF <n>     SDL audio device buffer in samples (default 2048)
+C64_AUDIO_TARGET <n>  pacing cushion in samples (default 3528, about 80 ms); raise
+                      on a jittery host to trade latency for fewer audio dropouts
+```
+
 ## Build
 
 ```sh
