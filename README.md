@@ -175,13 +175,6 @@ Deliberate, and documented at the point in the code that approximates them:
 
 - **NTSC is not implemented.** PAL only (63 cycles/line, 312 lines).
 - **No paddles** (`$D419`/`$D41A` read 0) and **no light pen**.
-- **SID filter cutoff is an averaged curve.** The register-to-Hz map is Antti
-  Lankila's averaged measured 6581 curve, so it is measured-grounded but not exact
-  for any one chip, and real 6581s vary widely chip to chip.
-- **SID per-voice DC offset is not modelled**, so the output is cleaner than a
-  real 6581, which clicks on every note.
-- **Combined waveforms** use the documented wired-AND model, not the real analog
-  bit-bleed.
 - **No copy protection support**: images relying on custom formatting or weak
   bits will not load.
 
