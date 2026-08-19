@@ -331,17 +331,26 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
     SDL_AtomicSet(&ring_tail, (int)tail);
 }
 
+#define AUDIO_DEV_BUF_DEFAULT 2048u
+#define AUDIO_DEV_BUF_MIN 512u
+#define AUDIO_DEV_BUF_MAX 16384u
+
 bool host_audio_init(int rate) {
     SDL_AudioSpec want, have;
     SDL_memset(&want, 0, sizeof(want));
     want.freq = rate;
     want.format = AUDIO_S16SYS;
     want.channels = 1;             // SID is mono
-    want.samples = 2048;           // device buffer; larger tolerates transport jitter
-    const char *buf_env = SDL_getenv("C64_AUDIO_BUF");  // device buffer override
+    want.samples = AUDIO_DEV_BUF_DEFAULT;
+    const char *buf_env = SDL_getenv("C64_AUDIO_BUF");
     if (buf_env) {
         int v = SDL_atoi(buf_env);
-        if (v >= 512 && v <= 16384) { want.samples = (Uint16)v; }
+        if (v >= (int)AUDIO_DEV_BUF_MIN && v <= (int)AUDIO_DEV_BUF_MAX) {
+            want.samples = (Uint16)v;
+        } else {
+            SDL_Log("C64: C64_AUDIO_BUF must be %u to %u; using the default %u.",
+                    AUDIO_DEV_BUF_MIN, AUDIO_DEV_BUF_MAX, AUDIO_DEV_BUF_DEFAULT);
+        }
     }
     want.callback = audio_callback;  // pull model: the audio thread drains the ring
     SDL_AtomicSet(&ring_head, 0);

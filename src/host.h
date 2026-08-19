@@ -38,15 +38,16 @@ bool host_warp(void);
 
 void host_shutdown(void);
 
-// SDL audio output (Phase 4d): mono signed-16-bit at the given rate, via SDL's
-// queue API (fed from the same thread as the main loop, so no locking). Returns
-// false on failure (the caller may continue without sound).
+// SDL audio output (Phase 4d): mono signed-16-bit at the given rate. Samples reach
+// the device through a lock-free single-producer/single-consumer ring: the main loop
+// pushes with host_audio_push, and SDL's audio thread pulls them in a callback. The
+// ring head and tail are the only shared state and are SDL atomics, so no lock is
+// taken. Returns false on failure (the caller may continue without sound).
 // Audio ring capacity in samples; the accepted C64_AUDIO_TARGET range is 1..this-1.
 #define HOST_AUDIO_RING 32768u
 bool host_audio_init(int rate);
 void host_audio_push(const int16_t *samples, int count);
-// Block until the queued audio drains to target_samples, pacing the emulation to
-// audio realtime.
+// Block until the ring drains to target_samples, pacing the emulation to audio realtime.
 void host_audio_pace(unsigned target_samples);
 void host_audio_shutdown(void);
 
