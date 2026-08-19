@@ -34,6 +34,10 @@ BIN = build/c64
 # Core objects without main.c or host.c (no SDL), shared by the test runner. The
 # drive is included so the drive suite links; the Lorenz runner does not call it.
 CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c
+# Every src header, a prerequisite of each rule that compiles src/*.c. The recipes
+# are single-shot, so a header edit rebuilds the whole artifact rather than leaving
+# it stale. test/test.h stays a separate explicit prerequisite of the test rules.
+HEADERS = $(wildcard src/*.h)
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
 
@@ -43,22 +47,22 @@ UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)
 
-$(BIN): $(SRC)
+$(BIN): $(SRC) $(HEADERS)
 	@command -v sdl2-config >/dev/null 2>&1 || { \
 	  echo "error: SDL2 not found. Install it (e.g. sudo apt install libsdl2-dev)."; \
 	  echo "The headless test runner still builds: make test"; exit 1; }
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(SRC) -o $(BIN) $(SDL_LIBS)
 
-$(TEST_BIN): $(TEST_SRC) $(CORE_SRC)
+$(TEST_BIN): $(TEST_SRC) $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(LORENZ_CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
 
-build/test-debug: test/debug_test.c test/test.h $(CORE_SRC)
+build/test-debug: test/debug_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(CSTD) $(WARN) $(OPT) -DDEBUG_TOOLS=1 -Isrc -Itest $< $(CORE_SRC) -o $@
 
-build/test-%: test/%_test.c test/test.h $(CORE_SRC)
+build/test-%: test/%_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
 
@@ -129,11 +133,11 @@ test-slow: $(SLOW_BINS)
 ASAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -g
 ASAN_BINS = $(addprefix build/asan-test-,$(UNIT_TESTS))
 
-build/asan-test-debug: test/debug_test.c test/test.h $(CORE_SRC)
+build/asan-test-debug: test/debug_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(CSTD) $(WARN) -O1 $(ASAN_FLAGS) -DDEBUG_TOOLS=1 -Isrc -Itest $< $(CORE_SRC) -o $@
 
-build/asan-test-%: test/%_test.c test/test.h $(CORE_SRC)
+build/asan-test-%: test/%_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(CSTD) $(WARN) -O1 $(ASAN_FLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
 
