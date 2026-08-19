@@ -398,6 +398,10 @@ void drive_set_iec_ext(uint8_t mask) {
     F(ones_run) F(bit_in_byte) F(sync_active) F(read_byte) F(byte_ready)       \
     F(write_prev)
 
+_Static_assert(offsetof(CPU6502, ctx) + sizeof drive.ctx + sizeof drive.rd + sizeof drive.wr
+                   == sizeof drive,
+    "ctx, rd, wr must be the last three CPU6502 members: put any new state field "
+    "before ctx, or drive_snapshot silently drops it.");
 void drive_snapshot(SnapOut *o) {
     snap_write(o, &drive, offsetof(CPU6502, ctx));
 #define W(f) snap_write(o, &(f), sizeof(f));

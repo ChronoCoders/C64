@@ -51,6 +51,10 @@ bool cpu_jammed(void) { return cpu6502_jammed(&cpu); }
 // Serialize the core up to its bus-callback pointers (ctx/rd/wr), which are set by
 // cpu6502_init and must survive a restore. Every execution/interrupt field precedes
 // them in the struct, so offsetof(ctx) is exactly the data prefix to save.
+_Static_assert(offsetof(CPU6502, ctx) + sizeof cpu.ctx + sizeof cpu.rd + sizeof cpu.wr
+                   == sizeof cpu,
+    "ctx, rd, wr must be the last three CPU6502 members: put any new state field "
+    "before ctx, or cpu_snapshot silently drops it.");
 void cpu_snapshot(SnapOut *o) {
     snap_write(o, &cpu, offsetof(CPU6502, ctx));
     snap_write(o, &cpu_port_dir, sizeof cpu_port_dir);
