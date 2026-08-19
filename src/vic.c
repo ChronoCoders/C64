@@ -72,7 +72,7 @@ static uint32_t framebuffer[VIC_FB_WIDTH * VIC_FB_HEIGHT];
 #define BA_LAST 54u
 #define BADLINE_FIRST_LINE 48u  // $30
 #define BADLINE_LAST_LINE 247u  // $F7
-#define STALL_GRACE_CYCLES 3    // CPU write cycles allowed after BA goes low
+#define STALL_GRACE_CYCLES 3    // cycles the CPU runs after BA goes low, not read/write gated (docs/approximations.md)
 
 // RSEL/CSEL display window (Part 2). RSEL ($D011 bit 3): 25 vs 24 rows, 4 lines
 // inset top and bottom. CSEL ($D016 bit 3): 40 vs 38 columns, 7 px inset left and
@@ -111,8 +111,8 @@ static uint8_t carry_fg[8];
 // badline detection and BA/RDY still run, only the pixel/fetch work is skipped.
 static bool render_on = true;
 
-// CPU stall grace: the CPU keeps running for a few cycles after BA goes low
-// (it can complete write cycles), then halts until the VIC releases the bus.
+// CPU stall grace: the CPU keeps running for a few cycles after BA goes low, then
+// halts until the VIC releases the bus. The grace is not read/write gated.
 static int stall_grace = STALL_GRACE_CYCLES;
 
 // Interrupt sources: $D019 latch and $D01A enable, bits 0-3. The raster source
@@ -700,8 +700,9 @@ void vic_tick(void) {
 }
 
 // BA/RDY handshake: while the VIC holds the bus (bus_ba low), the CPU keeps
-// running for up to STALL_GRACE_CYCLES (its remaining write cycles) and then
-// halts until the bus is released. This is the single source of the stall.
+// running for up to STALL_GRACE_CYCLES and then halts until the bus is released.
+// The grace is not gated on read vs write (see docs/approximations.md). This is
+// the single source of the stall.
 static bool cpu_should_run(void) {
     if (bus_ba) {
         stall_grace = STALL_GRACE_CYCLES;

@@ -29,6 +29,18 @@ one simplified reset.
   exception is not modelled.
 - Colour RAM reads return the stored low nibble only. Real hardware returns open-bus
   junk in the high nibble, which is not modelled.
+- The BA/RDY stall grace lets the CPU run for STALL_GRACE_CYCLES cycles after BA goes
+  low without checking whether each cycle reads or writes. Real hardware stalls the
+  6510 at its next read and lets only writes proceed, three being the ceiling because
+  no instruction has more than three consecutive writes. The net cost is exact, a
+  badline steals 40 cycles and a sprite two per active sprite, so only the phase is
+  off; read-heavy code can gain up to three cycles per badline. Visible only to
+  raster-exact code (`cpu_should_run`).
+- NMI edge detection does not run while the CPU is stalled. `vic_step` clocks
+  `cpu_tick` only when `cpu_should_run` is true, and `poll_nmi_edge` lives inside it,
+  whereas real hardware clocks the edge latch from phi2 regardless of RDY. Recognition
+  can be delayed by up to one badline stall. This is delay, not loss: the source holds
+  the line low until it is serviced.
 
 ## CIA (src/cia.c)
 
@@ -63,3 +75,26 @@ one simplified reset.
   specific drive. The model reads a consistent surface but cannot reproduce one
   particular drive's entry angle, so a loader that reads by raw rotational position
   and relies on that angle can be sensitive (see [disk-drive.md](disk-drive.md)).
+
+## Snapshots (src/snapshot.c)
+
+- Snapshot payloads are raw struct images, in host byte order and this compiler's
+  struct layout, so an image loads only in the same build, not across a different
+  endianness or ABI. See the SCOPE comment in `src/snapshot.c`.
+- A drive state field left out of `DRIVE_SNAP_FIELDS` in `src/drive.c` is silently
+  dropped from the snapshot. Unlike the CPU prefix, whose trailing bus pointers are
+  pinned by a static assertion, this is not expressible as a layout check and is held
+  only by the discipline of adding each new field to the macro.
+
+## Host audio (src/host.c)
+
+- The audio ring uses SDL atomics for the head and tail counters and no explicit
+  memory barriers. The ordering the ring needs, sample writes visible before the
+  counter that publishes them and the counter read before the dependent ring access,
+  is not guaranteed by SDL's documented contract, which promises barriers only for
+  operations that modify memory. It is supplied in practice by what the current
+  `SDL_AtomicSet` and `SDL_AtomicGet` implementations emit and by x86 store and load
+  ordering. Anyone porting to a weakly ordered target should not rely on that and
+  should add explicit `SDL_MemoryBarrierRelease` before publishing and
+  `SDL_MemoryBarrierAcquire` after reading rather than reasoning about which SDL
+  primitive happens to carry a barrier.

@@ -109,8 +109,8 @@ Command line:
 Environment (audio tuning, optional):
 
 ```
-C64_AUDIO_BUF <n>     SDL audio device buffer in samples (default 2048)
-C64_AUDIO_TARGET <n>  pacing cushion in samples (default 3528, about 80 ms); raise
+C64_AUDIO_BUF <n>     SDL audio device buffer in samples (512 to 16384, default 2048)
+C64_AUDIO_TARGET <n>  pacing cushion in samples (1 to 32767, default 3528, about 80 ms); raise
                       on a jittery host to trade latency for fewer audio dropouts
 ```
 
@@ -153,7 +153,7 @@ before the emulator will run.
 ## Accuracy and testing
 
 ```sh
-make test        # ~965 checks, fast unit suites (~2 s)
+make test        # 976 checks, fast unit suites (~2 s)
 make test-slow   # 69 checks, DOS/serial integration (~80 s)
 make test-cpu    # Wolfgang Lorenz 6502/6510 conformance (~10 min)
 ```
