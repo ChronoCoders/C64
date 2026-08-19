@@ -4,6 +4,9 @@
 // the $EBFF-$EC9D main/idle loop) are the documented 901229-05 ROM entry points
 // (Inside Commodore DOS; the 1541 ROM disassembly). The clock rates are the 1541
 // hardware 1.0 MHz and the C64 PAL phi2 985248 Hz.
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -19,6 +22,17 @@
 #include "cia.h"
 #include "sid.h"
 #include "iec.h"
+
+#ifdef _WIN32
+#include <direct.h>
+#define TEST_MKDIR(p) _mkdir(p)
+#define TEST_RMDIR(p) _rmdir(p)
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define TEST_MKDIR(p) mkdir((p), 0777)
+#define TEST_RMDIR(p) rmdir(p)
+#endif
 
 // A synthetic 16 KB ROM: writes a sentinel to drive RAM $0200, fills $0300-$03FF
 // with 0..255, writes a marker to $0400, then idles in a self-JMP. Reset vector
@@ -764,6 +778,56 @@ static void test_mount_rejects_overlong_path(void) {
     CHECK_EQ(disk_writeback() ? 1 : 0, 0, "writeback is a no-op with nothing mounted");
 }
 
+// A writeback that cannot complete must leave the on-disk original byte-identical.
+// The failure is forced by occupying the temp target (mount_path + ".tmp") with a
+// directory, so the temp file cannot be opened. The pre-fix code truncated
+// mount_path directly and wrote over the original, so the byte-identical check
+// below failed against it; the temp-and-rename design leaves the original untouched.
+// The post-open branches (short write, flush/sync/close/rename failure) are not
+// forced here: none can be triggered portably without root or a test seam.
+static void test_writeback_preserves_original_on_failure(void) {
+    const char *path = "build/wb_fail.d64";
+    const char *tmp = "build/wb_fail.d64.tmp";
+
+    static uint8_t seed[D64_STD_SIZE];
+    memset(seed, 0, sizeof seed);
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL, "seed image opens for writing");
+    if (f) { fwrite(seed, 1u, D64_STD_SIZE, f); fclose(f); }
+
+    CHECK(disk_mount(path), "the seed .d64 mounts cleanly");
+
+    // The bytes on disk at the moment of writeback: a pattern a successful writeback
+    // would overwrite, so surviving it byte-for-byte proves non-destruction.
+    static uint8_t orig[D64_STD_SIZE];
+    memset(orig, 0xE5, sizeof orig);
+    f = fopen(path, "wb");
+    CHECK(f != NULL, "original content is laid on disk");
+    if (f) { fwrite(orig, 1u, D64_STD_SIZE, f); fclose(f); }
+
+    TEST_RMDIR(tmp);
+    remove(tmp);
+    CHECK_EQ(TEST_MKDIR(tmp), 0, "occupy the temp file name with a directory");
+
+    CHECK_EQ(disk_writeback() ? 1 : 0, 0, "writeback fails when the temp file cannot be created");
+
+    static uint8_t reread[D64_STD_SIZE];
+    f = fopen(path, "rb");
+    size_t got = f ? fread(reread, 1u, sizeof reread, f) : 0;
+    int past_end = f ? fgetc(f) : 0;
+    if (f) { fclose(f); }
+    CHECK_EQ((int)got, D64_STD_SIZE, "the original file is still a full 174848-byte image");
+    CHECK_EQ(past_end, EOF, "the original file is no longer than before");
+    int identical = 1;
+    for (size_t i = 0; i < sizeof reread; i++) {
+        if (reread[i] != 0xE5u) { identical = 0; }
+    }
+    CHECK_EQ(identical, 1, "the original file survives the failed writeback byte-identical");
+
+    TEST_RMDIR(tmp);
+    remove(path);
+}
+
 // Hardware-level unit checks: sub-second, no DOS command path.
 static void drive_fast(const char *synth) {
     test_boot_from_rom_reaches_idle(synth);
@@ -779,6 +843,7 @@ static void drive_fast(const char *synth) {
     test_disk_optional();
     test_d64_error_info_variant();
     test_mount_rejects_overlong_path();
+    test_writeback_preserves_original_on_failure();
 }
 
 // DOS-integration checks (LOAD/SAVE/NEW/BAM/writeback through the GCR surface):
