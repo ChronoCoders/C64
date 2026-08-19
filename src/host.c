@@ -27,7 +27,7 @@ static SDL_GameController *pad;
 // so a render or scheduling hitch cannot starve the device into a click. Free-running
 // head/tail counters (masked only when indexing) make empty vs full unambiguous. On
 // underrun the callback holds the last sample rather than stepping to silence.
-#define AUDIO_RING 32768u            // power of two; ~0.74 s at 44.1 kHz
+#define AUDIO_RING HOST_AUDIO_RING   // power of two; ~0.74 s at 44.1 kHz
 #define AUDIO_RING_MASK (AUDIO_RING - 1u)
 static int16_t audio_ring[AUDIO_RING];
 static SDL_atomic_t ring_head;       // producer write count
@@ -379,7 +379,7 @@ void host_audio_pace(unsigned target_samples) {
     if (audio_dev == 0) {
         return;
     }
-    while ((Uint32)(SDL_AtomicGet(&ring_head) - SDL_AtomicGet(&ring_tail)) > target_samples) {
+    while (((Uint32)SDL_AtomicGet(&ring_head) - (Uint32)SDL_AtomicGet(&ring_tail)) > target_samples) {
         SDL_Delay(1);
     }
 }

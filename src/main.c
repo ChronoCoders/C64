@@ -86,7 +86,12 @@ static int run_visible(void) {
     const char *target_env = getenv("C64_AUDIO_TARGET");
     if (target_env) {
         long v = strtol(target_env, NULL, 10);
-        if (v > 0 && v < 100000) { audio_target = (unsigned)v; }
+        if (v > 0 && v < (long)HOST_AUDIO_RING) {
+            audio_target = (unsigned)v;
+        } else {
+            fprintf(stderr, "C64: C64_AUDIO_TARGET must be 1 to %u; using the default %u.\n",
+                    (unsigned)(HOST_AUDIO_RING - 1u), (unsigned)AUDIO_TARGET_SAMPLES);
+        }
     }
     unsigned autorun_frame = 0;
     size_t autorun_idx = 0;
