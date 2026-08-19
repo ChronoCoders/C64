@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static int test_pass;
 static int test_fail;
@@ -53,10 +54,23 @@ static int test_skip;
         printf("== %s ==\n", (suite));                                         \
     } while (0)
 
-// Print the per-suite line the Makefile aggregates, and return the exit code.
-#define TEST_SUMMARY(suite)                                                    \
-    (printf("%s: %d passed, %d failed, %d skipped\n", (suite), test_pass,      \
-            test_fail, test_skip),                                             \
-     test_fail == 0 ? 0 : 1)
+// Print the per-suite line the Makefile aggregates, and return the exit code. A run
+// that executed no checks (everything skipped) verified nothing, which is a failure
+// distinct from a check failing: it returns 2, not 1. Set C64_ALLOW_NO_CHECKS=1 where
+// an empty run is expected and acceptable.
+static int test_summary(const char *suite) {
+    printf("%s: %d passed, %d failed, %d skipped\n", suite, test_pass, test_fail,
+           test_skip);
+    if (test_pass + test_fail == 0) {
+        const char *allow = getenv("C64_ALLOW_NO_CHECKS");
+        if (!(allow && allow[0] == '1' && allow[1] == '\0')) {
+            printf("RESULT: no checks ran in %s, nothing was verified "
+                   "(set C64_ALLOW_NO_CHECKS=1 to allow)\n", suite);
+            return 2;
+        }
+    }
+    return test_fail == 0 ? 0 : 1;
+}
+#define TEST_SUMMARY(suite) test_summary(suite)
 
 #endif // TEST_H

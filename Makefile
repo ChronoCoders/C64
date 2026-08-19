@@ -75,13 +75,16 @@ build/test-%: test/%_test.c test/test.h $(CORE_SRC) $(HEADERS)
 SLOW_BINS = build/test-drive build/test-iec
 
 test: $(UNIT_BINS)
-	@rc=0; crashed=0; crashlist=""; : > build/test.log; \
+	@rc=0; crashed=0; crashlist=""; nochecks=0; nclist=""; : > build/test.log; \
 	for t in $(UNIT_BINS); do \
 	  arg=""; case $${t##*/} in test-drive|test-iec) arg=fast;; esac; \
 	  if ./$$t $$arg >> build/test.log 2>&1; then :; else \
-	    ec=$$?; rc=1; crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
-	    echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
-	      >> build/test.log; \
+	    ec=$$?; rc=1; \
+	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; else \
+	      crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
+	      echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
+	        >> build/test.log; \
+	    fi; \
 	  fi; \
 	done; \
 	echo "======== unit tests ========"; cat build/test.log; \
@@ -89,7 +92,9 @@ test: $(UNIT_BINS)
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
 	     END{printf "TOTAL: %d passed, %d failed, %d skipped (fast suites; run make test-slow and make test-cpu for the rest)\n",p,f,s}' build/test.log; \
 	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
-	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$nochecks -ne 0 ]; then echo "SUITES THAT RAN NO CHECKS ($$nochecks):$$nclist"; fi; \
+	if [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$nochecks -ne 0 ]; then echo "RESULT: no checks ran, nothing was verified"; exit 1; fi; \
 	echo "RESULT: all fast unit suites passed"
 
 # Wolfgang Lorenz 6502/6510 CPU-conformance suite. Slow (~14min); kept out of the
@@ -107,12 +112,15 @@ test-cpu: $(TEST_BIN)
 # Slow integration group: DOS format, LOAD/SAVE/NEW, near-full BAM, writeback,
 # and full IEC serial transactions. Same crash-visible aggregation as `make test`.
 test-slow: $(SLOW_BINS)
-	@rc=0; crashed=0; crashlist=""; : > build/test-slow.log; \
+	@rc=0; crashed=0; crashlist=""; nochecks=0; nclist=""; : > build/test-slow.log; \
 	for t in $(SLOW_BINS); do \
 	  if ./$$t slow >> build/test-slow.log 2>&1; then :; else \
-	    ec=$$?; rc=1; crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
-	    echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
-	      >> build/test-slow.log; \
+	    ec=$$?; rc=1; \
+	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; else \
+	      crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
+	      echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
+	        >> build/test-slow.log; \
+	    fi; \
 	  fi; \
 	done; \
 	echo "======== slow integration tests ========"; cat build/test-slow.log; \
@@ -120,7 +128,9 @@ test-slow: $(SLOW_BINS)
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
 	     END{printf "TOTAL: %d passed, %d failed, %d skipped (slow suites only)\n",p,f,s}' build/test-slow.log; \
 	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
-	if [ $$rc -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$nochecks -ne 0 ]; then echo "SUITES THAT RAN NO CHECKS ($$nochecks):$$nclist"; fi; \
+	if [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$nochecks -ne 0 ]; then echo "RESULT: no checks ran, nothing was verified"; exit 1; fi; \
 	echo "RESULT: all slow suites passed"
 
 # Sanitizer build: run the unit suites under AddressSanitizer and
@@ -142,12 +152,15 @@ build/asan-test-%: test/%_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	$(CC) $(CSTD) $(WARN) -O1 $(ASAN_FLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
 
 test-asan: $(ASAN_BINS)
-	@rc=0; \
+	@rc=0; nochecks=0; \
 	export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1; \
 	export ASAN_OPTIONS=detect_leaks=1; \
 	for t in $(ASAN_BINS); do \
 	  echo "======== $$t ========"; \
-	  if ./$$t; then :; else rc=1; echo "SANITIZER FINDING in $$t"; fi; \
+	  if ./$$t; then :; else ec=$$?; rc=1; \
+	    if [ $$ec -eq 2 ]; then nochecks=1; echo "NO CHECKS RAN in $$t, nothing was verified"; \
+	    else echo "SANITIZER FINDING in $$t"; fi; \
+	  fi; \
 	done; \
 	if command -v sdl2-config >/dev/null 2>&1; then \
 	  echo "======== host smoke (SDL dummy drivers) ========"; \
@@ -156,7 +169,9 @@ test-asan: $(ASAN_BINS)
 	  if SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/asan-host-smoke; then \
 	    echo "host adapter: no findings"; else rc=1; echo "SANITIZER FINDING in host smoke"; fi; \
 	fi; \
-	if [ $$rc -ne 0 ]; then echo "RESULT: sanitizer findings, see above"; exit 1; fi; \
+	if [ $$rc -ne 0 ]; then \
+	  if [ $$nochecks -eq 1 ]; then echo "RESULT: a suite ran no checks, nothing was verified"; \
+	  else echo "RESULT: sanitizer findings, see above"; fi; exit 1; fi; \
 	echo "RESULT: no sanitizer findings in the unit suites (incl. the KERNAL boot and host smoke)"
 
 # Line-coverage report (gcov; gcovr/lcov not required). Instruments the core once
