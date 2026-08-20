@@ -24,8 +24,13 @@ bool drive_present(void);
 // Advance the drive by one 1.0 MHz cycle.
 void drive_tick(void);
 
+// Clock rates for the drive/C64 ratio (integer, no float). One definition, shared
+// by drive.c and the clock-domain tests.
+#define DRIVE_HZ 1000000u
+#define C64_PHI2_HZ 985248u
+
 // Advance the drive by the number of drive cycles corresponding to n C64 phi2
-// cycles, using an integer accumulator for the 1000000 / 985248 ratio. No-op
+// cycles, using an integer accumulator for the DRIVE_HZ / C64_PHI2_HZ ratio. No-op
 // when the ROM is absent, so a driveless machine runs the C64 normally.
 void drive_run_phi2(uint32_t phi2_cycles);
 

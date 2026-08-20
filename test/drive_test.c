@@ -108,13 +108,57 @@ static void test_clock_domains(const char *synth) {
     drive_init();
     drive_load_rom(synth);
     drive_reset();  // resets the cycle counter and accumulator
-    drive_run_phi2(985248u);
+    drive_run_phi2(C64_PHI2_HZ);
     CHECK_EQ((long)drive_cycles(), 1000000, "985248 C64 cycles -> 1000000 drive cycles");
-    drive_run_phi2(985248u);
+    drive_run_phi2(C64_PHI2_HZ);
     CHECK_EQ((long)drive_cycles(), 2000000, "second C64 second -> 2000000 drive cycles");
     drive_reset();
     drive_run_phi2(1000u);
     CHECK_EQ((long)drive_cycles(), 1014, "1000 C64 cycles -> floor(1000*1e6/985248) = 1014");
+}
+
+// The accumulator must preserve its remainder across calls: stepping one C64 cycle
+// at a time (how iec_step_frame drives it) has to total the same as one bulk call,
+// and the ratio must not drift over many seconds. Source: drive_run_phi2 contract.
+static void test_clock_ratio_no_drift(const char *synth) {
+    drive_init();
+    drive_load_rom(synth);
+
+    // One full C64 second, 1-at-a-time vs one call: identical, and exactly one
+    // drive-second (DRIVE_HZ) with zero remainder.
+    drive_reset();
+    for (uint32_t i = 0; i < C64_PHI2_HZ; i++) { drive_run_phi2(1u); }
+    uint64_t ones = drive_cycles();
+    drive_reset();
+    drive_run_phi2(C64_PHI2_HZ);
+    uint64_t bulk = drive_cycles();
+    CHECK_EQ((long)ones, (long)bulk, "1-at-a-time totals the same as one bulk call");
+    CHECK_EQ((long)bulk, (long)DRIVE_HZ, "985248 C64 cycles is exactly DRIVE_HZ drive cycles");
+
+    // The same span partitioned differently (ones, sevens, one call) agrees, so the
+    // total never depends on how the elapsed cycles are chunked.
+    const uint32_t span = 100000u;
+    drive_reset();
+    for (uint32_t i = 0; i < span; i++) { drive_run_phi2(1u); }
+    uint64_t p1 = drive_cycles();
+    drive_reset();
+    for (uint32_t i = 0; i < span; i += 7u) {
+        drive_run_phi2(i + 7u <= span ? 7u : span - i);
+    }
+    uint64_t p7 = drive_cycles();
+    drive_reset();
+    drive_run_phi2(span);
+    uint64_t pall = drive_cycles();
+    CHECK_EQ((long)p1, (long)pall, "chunks of 1 match one call over the same span");
+    CHECK_EQ((long)p7, (long)pall, "chunks of 7 match one call over the same span");
+
+    // No drift over several seconds when stepped 1-at-a-time: exactly N*DRIVE_HZ.
+    drive_reset();
+    for (uint32_t s = 0; s < 3u; s++) {
+        for (uint32_t i = 0; i < C64_PHI2_HZ; i++) { drive_run_phi2(1u); }
+    }
+    CHECK_EQ((long)drive_cycles(), (long)(3u * DRIVE_HZ),
+             "3 seconds 1-at-a-time is exactly 3*DRIVE_HZ, no drift");
 }
 
 // With no ROM the drive does not attach and does not run; the C64 runs alone.
@@ -834,6 +878,7 @@ static void drive_fast(const char *synth) {
     test_drive_ram_works();
     test_bus_isolation(synth);
     test_clock_domains(synth);
+    test_clock_ratio_no_drift(synth);
     test_graceful_without_rom();
     test_real_dos_boot();
     test_stepper_halftrack_steps();

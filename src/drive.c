@@ -11,8 +11,7 @@
 // Clock domains: the drive runs at 1.0 MHz, the C64 at PAL phi2 985248 Hz. They
 // are asynchronous; drive_run_phi2 scales elapsed C64 cycles into drive cycles
 // with an integer accumulator so the ratio is exact over time without float.
-#define DRIVE_HZ 1000000u
-#define C64_PHI2_HZ 985248u
+// DRIVE_HZ / C64_PHI2_HZ are in drive.h so the tests assert against one definition.
 
 // Address decoding (1541, partial): 2 KB RAM mirrors across $0000-$17FF; VIA1
 // mirrors every 16 bytes in $1800-$1BFF, VIA2 in $1C00-$1FFF; the 16 KB ROM is
