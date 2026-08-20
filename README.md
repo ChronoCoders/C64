@@ -112,6 +112,10 @@ C64_AUDIO_TARGET <n>  pacing cushion in samples (1 to 32767, default 3528, about
                       on a jittery host to trade latency for fewer audio dropouts
 ```
 
+If no audio device can be opened (a headless box, or WSL2 with no ALSA card), the emulator
+reports `running without sound` and paces to realtime from a wall-clock frame timer instead of
+the audio clock. You get silence at authentic speed, never a fast-forward.
+
 ## Build
 
 ```sh
