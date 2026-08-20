@@ -47,4 +47,8 @@ void host_audio_push(const int16_t *samples, int count);
 void host_audio_pace(unsigned target_samples);
 void host_audio_shutdown(void);
 
+// Wall-clock frame pacing, used when no audio device is available to pace the loop.
+// Sleeps to the next ~50 Hz boundary so the machine runs at realtime regardless of audio.
+void host_pace_frame(void);
+
 #endif // HOST_H

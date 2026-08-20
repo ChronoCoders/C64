@@ -387,6 +387,22 @@ void host_audio_pace(unsigned target_samples) {
     }
 }
 
+// Fixed-timestep pacer for the no-audio path: without the audio device draining, the
+// loop has no realtime throttle and would run as fast as the host allows. 20 ms per
+// frame is the integer-ms approximation of the 19.95 ms PAL frame (about 50 Hz). A
+// large gap (a pause or a long hitch) resyncs instead of bursting catch-up frames.
+void host_pace_frame(void) {
+    static Uint32 next;
+    Uint32 now = SDL_GetTicks();
+    if (next == 0) { next = now; }
+    next += 20u;
+    if ((Sint32)(next - now) > 0) {
+        SDL_Delay(next - now);
+    } else if ((Sint32)(now - next) > 250) {
+        next = now;
+    }
+}
+
 void host_audio_shutdown(void) {
     if (audio_dev != 0) {
         SDL_CloseAudioDevice(audio_dev);

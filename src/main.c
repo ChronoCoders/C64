@@ -115,6 +115,8 @@ static int run_visible(void) {
         host_present(vic_framebuffer());
         if (audio) {
             host_audio_pace(audio_target);  // pace to audio realtime
+        } else {
+            host_pace_frame();  // no audio device: pace to wall-clock realtime
         }
     }
     host_audio_shutdown();
