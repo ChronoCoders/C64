@@ -1084,8 +1084,8 @@ static void op_bit_abs(void) { read_abs(bit_op); }
 // in the B bit of the pushed status and in the vector. int_push_vector is that
 // shared machinery (cycles 2-6); BRK and the hardware front-end set cpu.int_vector
 // and cpu.int_b, then defer to it. Hijacking (an NMI edge redirecting a BRK/IRQ
-// vector fetch) is a cycle-exact case the Lorenz suite does not exercise and is
-// not modelled here.
+// vector fetch to $FFFA) is modelled at the vector-select cycle below; the finer
+// cycle-exact timing of when the edge is sampled during the sequence is not.
 
 static void int_push_vector(void) {
     switch (cpu.cycle) {
