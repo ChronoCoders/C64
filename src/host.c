@@ -88,10 +88,9 @@ static const KeyMap KEY_POS[] = {
     {SDL_SCANCODE_RIGHTBRACKET, 6, 1}, {SDL_SCANCODE_GRAVE, 7, 1},
 };
 static bool symbolic_mode = true;  // symbolic is the friendly default; F11 toggles
-static bool warp_mode;             // F10 toggles unthrottled (turbo) emulation
 static bool joy_mode;              // F9 routes the cursor keys to the joystick instead
 static unsigned joy_port = 1;      // F8 swaps the port: 1 = joystick 2 (Port A, default), 0 = joystick 1 (Port B)
-static char base_title[64];        // window title, for appending the [WARP]/[JOY] tags
+static char base_title[64];        // window title, for appending the [JOY] tag
 
 #define LSHIFT_ROW 1u
 #define LSHIFT_COL 7u
@@ -162,7 +161,7 @@ void host_present(const uint32_t *framebuffer) {
 
 static void update_title(void) {
     char t[96];
-    SDL_snprintf(t, sizeof(t), "%s%s%s%s", base_title, warp_mode ? " [WARP]" : "",
+    SDL_snprintf(t, sizeof(t), "%s%s%s", base_title,
                  joy_port == 0 ? " [JOY1]" : " [JOY2]", joy_mode ? " CRSR" : "");
     SDL_SetWindowTitle(window, t);
 }
@@ -275,10 +274,6 @@ bool host_poll(void) {
                    !e.key.repeat) {
             symbolic_mode = !symbolic_mode;  // toggle symbolic/positional keyboard
             cia_key_reset();                 // drop held keys so none stick across modes
-        } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F10 &&
-                   !e.key.repeat) {
-            warp_mode = !warp_mode;  // host control (F10 = warp/turbo), not C64 input
-            update_title();
         } else if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_F9 &&
                    !e.key.repeat) {
             joy_mode = !joy_mode;  // host control (F9 = cursor keys as the joystick)
@@ -305,7 +300,6 @@ bool host_poll(void) {
     return quit;
 }
 
-bool host_warp(void) { return warp_mode; }
 
 const char *host_error(void) { return SDL_GetError(); }
 

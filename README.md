@@ -28,8 +28,7 @@ LOAD"*",8,1
 RUN
 ```
 
-The load runs at authentic 1541 speed (slow, by design). Press **F10** for warp
-if you would rather not wait.
+The load runs at authentic 1541 speed (slow, by design).
 
 You must supply your own ROM images first, see [ROM images](#rom-images).
 
@@ -53,7 +52,6 @@ against unit tests:
 |---|---|
 | **F8** | **Joystick port**: swap between port 2 (default) and port 1. Title shows `[JOY2]` or `[JOY1]`. Most games use port 2; some read port 1. |
 | **F9** | **Joystick mode**: the cursor keys become the joystick; Right Alt or Left Ctrl fire. Title adds `CRSR`. |
-| F10 | Warp (turbo). Runs unthrottled and mutes audio; a stock 1541 load finishes in seconds instead of ~80. |
 | F11 | Keyboard layout: symbolic (default, maps by character) or positional (authentic C64 key positions). |
 | F12 | Quit. |
 
