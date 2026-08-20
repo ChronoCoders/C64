@@ -15,6 +15,10 @@
 // never re-entrantly, so binding "which instance" per public entry (cpu6502_tick
 // /reset/init set C) lets the instruction body reference the instance as `cpu`
 // and its bus as bus_read/bus_write, keeping the extracted logic byte-identical.
+// INVARIANT: the core is non-reentrant by design. A caller must never tick, reset,
+// or init one instance from within another instance's tick, directly or through a
+// bus callback, or C is clobbered mid-instruction. All resumable state lives in
+// CPU6502, so stopping and resuming after any cycle is safe; nesting instances is not.
 static CPU6502 *C;
 #define cpu (*C)
 #define bus_read(a) (C->rd(C->ctx, (uint16_t)(a)))
