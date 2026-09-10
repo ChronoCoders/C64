@@ -307,7 +307,7 @@ static void noise_clock(unsigned v) {
     // 0, eventually silencing the noise until TEST/reset. Model it by clearing
     // each tapped bit whose combined non-noise output bit is 0.
     uint8_t ctrl = reg[REG_CTRL(v)];
-    if (ctrl & (CTRL_TRI | CTRL_SAW | CTRL_PULSE)) {
+    if ((ctrl & CTRL_NOISE) && (ctrl & (CTRL_TRI | CTRL_SAW | CTRL_PULSE))) {
         uint16_t other = wave_non_noise(v);
         for (unsigned j = 0; j < 8; j++) {
             if (!((other >> (4u + j)) & 1u)) {
