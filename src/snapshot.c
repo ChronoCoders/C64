@@ -1,9 +1,21 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "snapshot.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "bus.h"
 #include "cia.h"
@@ -35,6 +47,11 @@ static const char SNAP_END[8] = {'E', 'N', 'D', 'S', 'N', 'A', 'P', '2'};
 // of registers and framing.
 #define SNAP_CAP (192u * 1024u)
 static uint8_t snap_buf[SNAP_CAP];
+
+// Path buffer bound for the atomic-save temp and parent-directory sync. 4096 is the
+// Linux PATH_MAX and well above the Windows limit; an over-long path is refused, not
+// truncated.
+#define SNAP_PATH_CAP 4096u
 
 struct SnapOut {
     uint8_t *base;
@@ -104,6 +121,41 @@ static size_t block_size(void (*save)(SnapOut *)) {
     return o.len;
 }
 
+// Durable temp-then-replace, mirroring the D64 writeback path in disk.c. Duplicated
+// rather than shared because disk.c's helpers are static and its POSIX replace sizes
+// its directory buffer from that module's mount_path; a shared helper is a follow-up.
+#ifdef _WIN32
+static int snap_sync(FILE *f) { return _commit(_fileno(f)); }
+static bool snap_replace(const char *tmp, const char *dst) {
+    return MoveFileExA(tmp, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+#else
+static int snap_sync(FILE *f) { return fsync(fileno(f)); }
+static bool snap_replace(const char *tmp, const char *dst) {
+    if (rename(tmp, dst) != 0) {  // atomically replaces the destination on the same volume
+        return false;
+    }
+    // The rename is durable only once the parent directory entry is synced.
+    char dir[SNAP_PATH_CAP];
+    const char *slash = strrchr(dst, '/');
+    if (slash == NULL) {
+        dir[0] = '.'; dir[1] = '\0';
+    } else if (slash == dst) {
+        dir[0] = '/'; dir[1] = '\0';
+    } else {
+        size_t dl = (size_t)(slash - dst);
+        memcpy(dir, dst, dl);
+        dir[dl] = '\0';
+    }
+    int dfd = open(dir, O_RDONLY);
+    if (dfd >= 0) {
+        fsync(dfd);
+        close(dfd);
+    }
+    return true;
+}
+#endif
+
 bool snapshot_save(const char *path) {
     SnapOut o = {snap_buf, 0, sizeof snap_buf, false};
     snap_write(&o, SNAP_MAGIC, sizeof SNAP_MAGIC);
@@ -121,15 +173,31 @@ bool snapshot_save(const char *path) {
     if (o.overflow) {
         return false;
     }
-    FILE *f = fopen(path, "wb");
+    // Write a sibling temp, flush and sync it, close, then atomically replace the
+    // destination. The destination is never opened for writing until the replace, so
+    // any failure before it leaves the previous snapshot byte-for-byte intact.
+    size_t plen = strlen(path);
+    char tmp_path[SNAP_PATH_CAP];
+    if (plen + sizeof(".tmp") > sizeof tmp_path) {
+        return false;
+    }
+    memcpy(tmp_path, path, plen);
+    memcpy(tmp_path + plen, ".tmp", sizeof(".tmp"));
+
+    FILE *f = fopen(tmp_path, "wb");
     if (!f) {
         return false;
     }
-    bool ok = fwrite(snap_buf, 1, o.len, f) == o.len;
+    bool ok = (fwrite(snap_buf, 1, o.len, f) == o.len) && (fflush(f) == 0) &&
+              (snap_sync(f) == 0);
     if (fclose(f) != 0) {
         ok = false;
     }
-    return ok;
+    if (ok && snap_replace(tmp_path, path)) {
+        return true;
+    }
+    remove(tmp_path);
+    return false;
 }
 
 SnapResult snapshot_load(const char *path) {

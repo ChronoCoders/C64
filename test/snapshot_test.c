@@ -16,6 +16,16 @@
 #include "snapshot.h"
 #include "vic.h"
 
+// C64-002 failure injection needs a POSIX file-size limit (RLIMIT_FSIZE) with SIGXFSZ
+// ignored so a write fails after the destination is opened. Elsewhere the control skips.
+#ifdef _WIN32
+#define C002_CAN_INJECT 0
+#else
+#include <signal.h>
+#include <sys/resource.h>
+#define C002_CAN_INJECT 1
+#endif
+
 #define SNAP_PATH "/tmp/c64_snapshot_test.snap"
 
 static void init_machine(void) {
@@ -264,6 +274,85 @@ static void test_failed_load_preserves_prior_state(void) {
     CHECK_EQ(fpP.dram1, fpA.dram1, "C64-001 invariant: drive RAM $0600 unchanged after a rejected load");
 }
 
+// C64-002 control: a failed snapshot_save must not destroy the file already at path.
+// snapshot_save opens the destination with fopen(path, "wb"), truncating it before the
+// write, so a fwrite/fclose failure leaves the previously valid snapshot gone. The D64
+// writeback path (disk.c) avoids this by writing a sibling temp then atomically
+// replacing. Injection: RLIMIT_FSIZE=0 lets fopen(wb) truncate the file but makes the
+// write fail (EFBIG); the failure landing after the open is shown by the destination
+// being truncated to 0. Expected RED on the byte-identity assertion until the save is
+// made atomic.
+static uint64_t fnv1a(const uint8_t *b, long n) {
+    uint64_t h = 1469598103934665603ULL;
+    for (long i = 0; i < n; i++) {
+        h = (h ^ b[i]) * 1099511628211ULL;
+    }
+    return h;
+}
+
+static long read_all(const char *p, uint8_t *buf, long cap) {
+    FILE *f = fopen(p, "rb");
+    if (!f) {
+        return -1;
+    }
+    long n = (long)fread(buf, 1, (size_t)cap, f);
+    fclose(f);
+    return n;
+}
+
+static void test_failed_save_preserves_existing_file(void) {
+#if C002_CAN_INJECT
+    const char *path = "/tmp/c64_snap_c002.snap";
+    const char *scratch = "/tmp/c64_snap_c002_s2.snap";
+    remove(path);
+    remove(scratch);
+    static uint8_t r1[262144], s2[262144], after[262144];
+
+    init_machine();
+    mem_write(0x0400u, 0xA1u); cpu.a = 0x11u; vic.raster_line = 40u;
+    CHECK(snapshot_save(path), "C64-002 fixture: S1 save returns true");
+    CHECK_EQ(snapshot_load(path), SNAP_OK, "C64-002 fixture: the saved S1 loads");
+
+    long r1n = read_all(path, r1, sizeof r1);
+    CHECK(r1n > 0, "C64-002 fixture: R1 read back, non-empty");
+    uint64_t r1h = fnv1a(r1, r1n < 0 ? 0 : r1n);
+
+    init_machine();
+    mem_write(0x0400u, 0x5Eu); cpu.a = 0x22u; vic.raster_line = 200u;
+    CHECK(snapshot_save(scratch), "C64-002 fixture: distinct S2 save returns true");
+    long s2n = read_all(scratch, s2, sizeof s2);
+    CHECK(s2n == r1n && memcmp(s2, r1, (size_t)(r1n < 0 ? 0 : r1n)) != 0,
+          "C64-002 sensitivity: an S2 snapshot differs from R1 in content");
+    CHECK(r1n != 0, "C64-002 sensitivity: a truncation to 0 would change the length and be detected");
+
+    // The machine still holds S2. Make snapshot_save(path) fail after fopen(wb) has
+    // truncated the destination: a zero file-size limit permits the open and truncate
+    // but fails the write with EFBIG (SIGXFSZ ignored so the process is not killed).
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 0;
+    void (*oldsig)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    bool save_ok = snapshot_save(path);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, oldsig);
+
+    CHECK(!save_ok, "C64-002: save under a zero file-size limit returns false");
+
+    long an = read_all(path, after, sizeof after);
+    uint64_t ah = fnv1a(after, an < 0 ? 0 : an);
+    CHECK_EQ((long long)an, (long long)r1n, "C64-002 invariant: file length unchanged after a failed save");
+    CHECK_EQ((long long)ah, (long long)r1h, "C64-002 invariant: file bytes unchanged after a failed save");
+
+    remove(path);
+    remove(scratch);
+#else
+    SKIP("C64-002 invariant: a failed save preserves the existing file",
+         "failure injection needs POSIX RLIMIT_FSIZE, unavailable on this platform");
+#endif
+}
+
 int main(void) {
     TEST_BEGIN("snapshot");
     test_round_trip_restores_all_blocks();
@@ -272,6 +361,7 @@ int main(void) {
     test_wrong_version_rejected();
     test_truncated_rejected();
     test_failed_load_preserves_prior_state();
+    test_failed_save_preserves_existing_file();
     test_missing_file_rejected();
     return TEST_SUMMARY("snapshot");
 }
