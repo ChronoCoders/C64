@@ -68,6 +68,39 @@ static void test_noise_first_output_is_fe(void) {
     CHECK_EQ(sid_read(R_OSC3), 0xFEu, "noise OSC3 still 0xFE after first LFSR shift");
 }
 
+// C64-007 control: selecting only a non-noise waveform must not run down the noise
+// LFSR. The LFSR shifts on every accumulator bit19 rising edge regardless of the
+// selected waveform, so three arms from the same reset, frequency and cycle count
+// isolate the destructive combined-waveform guard: pure noise (L1), pure sawtooth
+// (L2), noise plus sawtooth (L3). L1 == L2 is the protected invariant; L3 != L1 is
+// the positive control proving combined-waveform feedback is still active. Expected
+// RED on the current tree, where sawtooth-only degrades the register toward zero.
+static uint32_t lfsr_after(uint8_t ctrl, unsigned n) {
+    sid_reset();
+    sid_write(R_V0_FREQLO, 0x00u);
+    sid_write(R_V0_FREQHI, 0x80u);  // freq 0x8000: accumulator bit19 clocks the LFSR
+    sid_write(R_V0_CTRL, ctrl);
+    for (unsigned i = 0; i < n; i++) {
+        sid_clock();
+    }
+    return sid_voice_noise(0);
+}
+
+static void test_non_noise_waveform_preserves_lfsr(void) {
+    const unsigned N = 8192u;  // freq 0x8000 gives about 256 LFSR clocks over N
+    sid_reset();
+    uint32_t seed = sid_voice_noise(0);  // post-reset LFSR, no hardcoded constant
+
+    uint32_t l1 = lfsr_after(CTRL_NOISE, N);              // noise only
+    uint32_t l2 = lfsr_after(CTRL_SAW, N);                // non-noise only
+    uint32_t l3 = lfsr_after(CTRL_NOISE | CTRL_SAW, N);   // noise plus non-noise
+
+    CHECK(l1 != seed, "C64-007 fixture: noise LFSR advanced from its reset seed");
+    CHECK(l3 != l1, "C64-007 sensitivity/feedback: noise+saw LFSR differs from noise-only");
+    CHECK_EQ((long long)l2, (long long)l1,
+             "C64-007 invariant: sawtooth-only leaves the noise LFSR equal to noise-only");
+}
+
 // Test 2: Waveform DDS math vs the 6581 datasheet definitions.
 static void test_waveform_math_matches_datasheet(void) {
     // Sawtooth: out = (acc>>12)&0xFFF (top 12 bits). Datasheet ramp.
@@ -421,6 +454,7 @@ int main(void) {
     test_filter_audio_bit_identical();
     test_audio_startup_primed_no_thump();
     test_noise_first_output_is_fe();
+    test_non_noise_waveform_preserves_lfsr();
     test_waveform_math_matches_datasheet();
     test_ring_source_is_previous_voice();
     test_attack_rate_zero_peaks_at_255_steps();
