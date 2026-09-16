@@ -94,26 +94,14 @@ static void put_block(SnapOut *o, uint8_t tag, void (*fn)(SnapOut *)) {
     }
 }
 
-static SnapResult get_block(SnapIn *i, uint8_t want, void (*fn)(SnapIn *)) {
-    uint8_t tag = 0;
-    uint32_t blen = 0;
-    snap_read(i, &tag, 1);
-    snap_read(i, &blen, sizeof blen);
-    if (i->underflow) {
-        return SNAP_ERR_TRUNCATED;
-    }
-    if (tag != want) {
-        return SNAP_ERR_LAYOUT;
-    }
-    size_t start = i->pos;
-    fn(i);
-    if (i->underflow) {
-        return SNAP_ERR_TRUNCATED;
-    }
-    if (i->pos - start != blen) {
-        return SNAP_ERR_LAYOUT;  // subsystem consumed a different length than saved
-    }
-    return SNAP_OK;
+// Bytes a subsystem's block occupies, derived from its own serializer: a
+// zero-capacity cursor writes nothing but still counts the field lengths. save and
+// restore share one field set, so this is the exact length the restore will consume,
+// which pass 1 checks before pass 2 commits.
+static size_t block_size(void (*save)(SnapOut *)) {
+    SnapOut o = {NULL, 0, 0, false};
+    save(&o);
+    return o.len;
 }
 
 bool snapshot_save(const char *path) {
@@ -156,6 +144,10 @@ SnapResult snapshot_load(const char *path) {
         return SNAP_ERR_LAYOUT;
     }
 
+    // Pass 1: validate the header and every block's framing with no mutation of
+    // machine state, recording a bounded slice per block. Any malformed input is
+    // rejected here, before pass 2 touches the machine, so a rejected load leaves the
+    // machine exactly as it was (snapshot.h contract: nothing partial left running).
     SnapIn i = {snap_buf, 0, n, false};
     char magic[8];
     uint32_t ver = 0;
@@ -170,17 +162,40 @@ SnapResult snapshot_load(const char *path) {
 
     const struct {
         uint8_t tag;
-        void (*fn)(SnapIn *);
+        void (*save)(SnapOut *);
+        void (*restore)(SnapIn *);
     } blocks[] = {
-        {TAG_MEM, mem_restore},   {TAG_CPU, cpu_restore}, {TAG_BUS, bus_restore},
-        {TAG_VIC, vic_restore},   {TAG_CIA, cia_restore}, {TAG_SID, sid_restore},
-        {TAG_IEC, iec_restore},   {TAG_DRIVE, drive_restore},
+        {TAG_MEM, mem_snapshot, mem_restore},   {TAG_CPU, cpu_snapshot, cpu_restore},
+        {TAG_BUS, bus_snapshot, bus_restore},   {TAG_VIC, vic_snapshot, vic_restore},
+        {TAG_CIA, cia_snapshot, cia_restore},   {TAG_SID, sid_snapshot, sid_restore},
+        {TAG_IEC, iec_snapshot, iec_restore},   {TAG_DRIVE, drive_snapshot, drive_restore},
     };
-    for (size_t b = 0; b < sizeof blocks / sizeof blocks[0]; b++) {
-        SnapResult r = get_block(&i, blocks[b].tag, blocks[b].fn);
-        if (r != SNAP_OK) {
-            return r;
+    const size_t nblocks = sizeof blocks / sizeof blocks[0];
+    struct {
+        const uint8_t *base;
+        size_t len;
+    } desc[sizeof blocks / sizeof blocks[0]];
+
+    for (size_t b = 0; b < nblocks; b++) {
+        uint8_t tag = 0;
+        uint32_t blen = 0;
+        snap_read(&i, &tag, 1);
+        snap_read(&i, &blen, sizeof blen);
+        if (i.underflow) {
+            return SNAP_ERR_TRUNCATED;  // ended inside a block header
         }
+        if (tag != blocks[b].tag) {
+            return SNAP_ERR_LAYOUT;
+        }
+        if (blen != block_size(blocks[b].save)) {
+            return SNAP_ERR_LAYOUT;  // declared length is not what this block holds
+        }
+        if (blen > i.len - i.pos) {
+            return SNAP_ERR_TRUNCATED;  // payload runs past the end of the file
+        }
+        desc[b].base = i.base + i.pos;
+        desc[b].len = blen;
+        i.pos += blen;
     }
 
     char end[8];
@@ -190,6 +205,14 @@ SnapResult snapshot_load(const char *path) {
     }
     if (i.pos != i.len) {
         return SNAP_ERR_LAYOUT;  // trailing bytes: not the file we think it is
+    }
+
+    // Pass 2: commit from the validated descriptors only. No structural parsing
+    // remains here, so no decision past this point depends on input shape; each
+    // restore reads exactly its validated slice and cannot underflow.
+    for (size_t b = 0; b < nblocks; b++) {
+        SnapIn bi = {desc[b].base, 0, desc[b].len, false};
+        blocks[b].restore(&bi);
     }
 
     // Derived state that is not serialized: rebuild the memory banking from the
