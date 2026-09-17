@@ -61,14 +61,17 @@ static LgParse lg_parse_line(const char *line, LgResult *out) {
     unsigned long passed = 0;
     char vals[4][LG_ID_CAP] = {{0}, {0}, {0}, {0}};
     while (pos <= len) {
-        if (pos == len) { break; }  // trailing content already consumed
+        if (pos == len) { break; }  // last token ended at end of line
         tlen = 0;
         while (pos < len && line[pos] != ' ') {
             if (tlen + 1u >= sizeof tok) { return LG_PARSE_MALFORMED; }
             tok[tlen++] = line[pos++];
         }
         tok[tlen] = '\0';
-        if (pos < len && line[pos] == ' ') { pos++; }
+        if (pos < len && line[pos] == ' ') {
+            pos++;
+            if (pos == len) { return LG_PARSE_MALFORMED; }  // trailing separator space
+        }
         if (tlen == 0u) { return LG_PARSE_MALFORMED; }  // stray/double space
         char *eq = strchr(tok, '=');
         if (eq == NULL || eq == tok || eq[1] == '\0') { return LG_PARSE_MALFORMED; }
@@ -80,6 +83,9 @@ static LgParse lg_parse_line(const char *line, LgResult *out) {
         if (seen[ki]) { return LG_PARSE_DUP_FIELD; }
         seen[ki] = 1;
         if (ki == 0) {
+            for (const char *d = val; *d != '\0'; d++) {
+                if (*d < '0' || *d > '9') { return LG_PARSE_BAD_PASSED; }  // plain decimal only
+            }
             char *end = NULL;
             passed = strtoul(val, &end, 10);
             if (end == val || *end != '\0') { return LG_PARSE_BAD_PASSED; }

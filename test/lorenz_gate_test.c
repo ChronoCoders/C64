@@ -93,10 +93,59 @@ static void test_semantic(void) {
     remove(baseline);
 }
 
+// QA-001 strict-parser gaps: falsification controls. Each anomalous line is measured
+// against the documented canonical contract (leading/trailing space is malformed; passed
+// is plain decimal). Parse outcome and gate decision are asserted separately so a
+// malformed-but-accepted line is distinguished from one rejected by semantic mismatch.
+static void test_parser_gaps(void) {
+    const char *baseline = "/tmp/lg_gaps_baseline_qa001.txt";
+    write_file(baseline, GOOD_LINE);
+    LgResult r;
+
+    CHECK_EQ(lg_parse(GOOD_LINE, &r), LG_PARSE_OK, "positive control: clean line parses");
+    CHECK_EQ(lg_decide(GOOD_LINE, baseline), LG_OK, "positive control: clean line accepted");
+
+    // Gap 1: one trailing space after the last token. Contract: trailing space malformed.
+    const char *trail =
+        "LORENZ_RESULT passed=236 last=TRAP15 stop_reason=NO_PROGRESS stop_test=TRAP16 \n";
+    CHECK_EQ(lg_parse(trail, &r), LG_PARSE_MALFORMED, "trailing space is malformed (parse)");
+    CHECK_EQ(lg_decide(trail, baseline), LG_BAD_RESULT, "trailing space is rejected (decide)");
+
+    // Leading space before LORENZ_RESULT. Contract: leading space malformed.
+    const char *lead =
+        " LORENZ_RESULT passed=236 last=TRAP15 stop_reason=NO_PROGRESS stop_test=TRAP16\n";
+    CHECK_EQ(lg_parse(lead, &r), LG_PARSE_NONE, "leading space not recognized as canonical (parse)");
+    CHECK_EQ(lg_decide(lead, baseline), LG_BAD_RESULT, "leading space is rejected (decide)");
+
+    // Gap 2a: passed=+236. Contract: passed is plain decimal, so a leading sign is malformed.
+    const char *plus =
+        "LORENZ_RESULT passed=+236 last=TRAP15 stop_reason=NO_PROGRESS stop_test=TRAP16\n";
+    CHECK_EQ(lg_parse(plus, &r), LG_PARSE_BAD_PASSED, "passed=+236 is not plain decimal (parse)");
+    CHECK_EQ(lg_decide(plus, baseline), LG_BAD_RESULT, "passed=+236 is rejected (decide)");
+
+    // Gap 2b: passed=-1. A leading sign is not plain decimal, so it is rejected as a bad
+    // passed value at parse and BAD_RESULT at the gate, not admitted and then caught only by
+    // value mismatch as it was before the digit-only fix.
+    const char *neg =
+        "LORENZ_RESULT passed=-1 last=TRAP15 stop_reason=NO_PROGRESS stop_test=TRAP16\n";
+    CHECK_EQ(lg_parse(neg, &r), LG_PARSE_BAD_PASSED, "passed=-1 is not plain decimal (parse)");
+    CHECK_EQ(lg_decide(neg, baseline), LG_BAD_RESULT, "passed=-1 rejected as malformed passed (decide)");
+
+    // Gap 3: leading whitespace in the passed value. The tokenizer splits only on 0x20, so a
+    // value may begin with a tab; strtoul then skips it. Contract: plain decimal.
+    const char *tab =
+        "LORENZ_RESULT passed=\t236 last=TRAP15 stop_reason=NO_PROGRESS stop_test=TRAP16\n";
+    CHECK_EQ(lg_parse(tab, &r), LG_PARSE_BAD_PASSED, "passed=<tab>236 is not plain decimal (parse)");
+    CHECK_EQ(lg_decide(tab, baseline), LG_BAD_RESULT, "passed=<tab>236 is rejected (decide)");
+
+    remove(baseline);
+}
+
 int main(void) {
     TEST_BEGIN("lorenz_gate");
     test_parser_integrity();
     test_baseline_integrity();
     test_semantic();
+    test_parser_gaps();
     return TEST_SUMMARY("lorenz_gate");
 }
