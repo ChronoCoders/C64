@@ -87,6 +87,7 @@ static const uint8_t IRQ_STUB[] = {
 
 static char g_suite_dir[512] = DEFAULT_SUITE_DIR;
 static char g_current[FNAME_MAX + 1];
+static char g_last[FNAME_MAX + 1];  // most recent test that chained (passed)
 
 static char g_output[OUTPUT_CAP];
 static size_t g_output_len;
@@ -202,6 +203,7 @@ static void finalize_current(void) {
     if (g_current[0] == '\0' || strcmp(g_current, ENTRY_FILE) == 0) {
         return;  // the loader/banner is not a test
     }
+    memcpy(g_last, g_current, sizeof(g_last));
     g_passed++;
 }
 
@@ -384,6 +386,45 @@ static void report(StopReason reason) {
     }
 }
 
+// Canonical machine-readable result for the CPU gate: one line on stdout on a normal
+// measured frontier. Ids are whitespace-free (control bytes mapped to '_', empty mapped
+// to NONE) so the strict gate parser can split fields on spaces.
+static const char *reason_id(StopReason reason) {
+    switch (reason) {
+        case STOP_END_MARKER:  return "END_MARKER";
+        case STOP_RESET:       return "RESET";
+        case STOP_NO_PROGRESS: return "NO_PROGRESS";
+        case STOP_UNIMPL:      return "UNIMPL";
+        case STOP_JAM:         return "JAM";
+        case STOP_IO_WAIT:     return "IO_WAIT";
+        case STOP_LOAD_FAILED: return "LOAD_FAILED";
+        case STOP_NONE:        return "NONE";
+    }
+    return "NONE";
+}
+
+static void sanitize_id(const char *in, char *out, size_t cap) {
+    if (in[0] == '\0') {
+        snprintf(out, cap, "NONE");
+        return;
+    }
+    size_t n = 0;
+    for (const char *p = in; *p != '\0' && n + 1u < cap; p++) {
+        unsigned char c = (unsigned char)*p;
+        out[n++] = (c <= 0x20u || c == 0x7Fu) ? '_' : (char)c;
+    }
+    out[n] = '\0';
+}
+
+static void emit_canonical(StopReason reason) {
+    char last_id[FNAME_MAX + 1];
+    char stop_id[FNAME_MAX + 1];
+    sanitize_id(g_last, last_id, sizeof last_id);
+    sanitize_id(g_current, stop_id, sizeof stop_id);
+    printf("LORENZ_RESULT passed=%u last=%s stop_reason=%s stop_test=%s\n",
+           g_passed, last_id, reason_id(reason), stop_id);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);  // line-buffered: a killed run keeps its trail
     if (argc > 1) {
@@ -416,5 +457,9 @@ int main(int argc, char **argv) {
 
     StopReason reason = run();
     report(reason);
+    if (reason == STOP_LOAD_FAILED) {
+        return 2;  // corpus incomplete: a chained test file was missing, a harness failure
+    }
+    emit_canonical(reason);
     return 0;
 }

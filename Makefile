@@ -40,9 +40,11 @@ CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/c
 HEADERS = $(wildcard src/*.h)
 TEST_SRC = test/runner.c
 TEST_BIN = build/lorenz-runner
+LORENZ_GATE = build/lorenz-gate
+LORENZ_BASELINE = test/lorenz_baseline.txt
 
 # One durable unit-test binary per subsystem, plus the Lorenz runner.
-UNIT_TESTS = mem cpu cia sid vic drive via iec gcr debug snapshot
+UNIT_TESTS = mem cpu cia sid vic drive via iec gcr debug snapshot lorenz_gate
 UNIT_BINS = $(addprefix build/test-,$(UNIT_TESTS))
 
 all: $(BIN)
@@ -57,6 +59,14 @@ $(BIN): $(SRC) $(HEADERS)
 $(TEST_BIN): $(TEST_SRC) $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
 	$(CC) $(LORENZ_CFLAGS) -Isrc $(TEST_SRC) $(CORE_SRC) -o $(TEST_BIN)
+
+$(LORENZ_GATE): test/lorenz_gate.c test/lorenz_gate.h
+	@mkdir -p build
+	$(CC) $(CSTD) $(WARN) $(OPT) -Itest test/lorenz_gate.c -o $(LORENZ_GATE)
+
+build/test-lorenz_gate: test/lorenz_gate_test.c test/lorenz_gate.h test/test.h $(CORE_SRC) $(HEADERS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Isrc -Itest $< $(CORE_SRC) -o $@
 
 build/test-debug: test/debug_test.c test/test.h $(CORE_SRC) $(HEADERS)
 	@mkdir -p build
@@ -97,17 +107,19 @@ test: $(UNIT_BINS)
 	if [ $$nochecks -ne 0 ]; then echo "RESULT: no checks ran, nothing was verified"; exit 1; fi; \
 	echo "RESULT: all fast unit suites passed"
 
-# Wolfgang Lorenz 6502/6510 CPU-conformance suite. Slow (~14min); kept out of the
-# fast `make test` loop. Informational like the original: the runner reports its
-# pass count and stop reason on stdout and exits 0 unless the suite files are
-# absent (exit 1), which is surfaced but not treated as a regression here.
-test-cpu: $(TEST_BIN)
+# Wolfgang Lorenz 6502/6510 CPU-conformance suite. Slow (~14min); kept out of the fast
+# `make test` loop. The runner emits one canonical result on stdout; the C gate parses
+# it strictly and compares it to the checked-in baseline. A failing runner (nonzero
+# exit) or a frontier that does not match the baseline fails this target.
+test-cpu: $(TEST_BIN) $(LORENZ_GATE)
 	@echo "======== lorenz (CPU conformance) ========"; \
-	if ./$(TEST_BIN) 2>/dev/null | grep -E "Tests passed|Stopped in test|Boundary reached|Run complete"; then \
-	  echo "RESULT: lorenz run reported above"; \
-	else \
-	  echo "  (lorenz suite not present under test/lorenz; skipped)"; \
-	fi
+	out=build/lorenz-result.txt; \
+	./$(TEST_BIN) > $$out 2>/dev/null; rc=$$?; \
+	if ./$(LORENZ_GATE) $(LORENZ_BASELINE) < $$out; then :; else \
+	  echo "FAIL: lorenz gate rejected the run"; cat $$out; rm -f $$out; exit 1; fi; \
+	if [ $$rc -ne 0 ]; then \
+	  echo "FAIL: lorenz runner exited $$rc (harness failure)"; rm -f $$out; exit 1; fi; \
+	echo "RESULT: lorenz frontier matches baseline:"; grep '^LORENZ_RESULT ' $$out; rm -f $$out
 
 # Slow integration group: DOS format, LOAD/SAVE/NEW, near-full BAM, writeback,
 # and full IEC serial transactions. Same crash-visible aggregation as `make test`.
