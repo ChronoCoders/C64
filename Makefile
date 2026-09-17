@@ -85,12 +85,16 @@ build/test-%: test/%_test.c test/test.h $(CORE_SRC) $(HEADERS)
 SLOW_BINS = build/test-drive build/test-iec
 
 test: $(UNIT_BINS)
-	@rc=0; crashed=0; crashlist=""; nochecks=0; nclist=""; : > build/test.log; \
+	@rc=0; crashed=0; crashlist=""; failed=0; faillist=""; nochecks=0; nclist=""; : > build/test.log; \
 	for t in $(UNIT_BINS); do \
 	  arg=""; case $${t##*/} in test-drive|test-iec) arg=fast;; esac; \
 	  if ./$$t $$arg >> build/test.log 2>&1; then :; else \
 	    ec=$$?; rc=1; \
-	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; else \
+	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; \
+	    elif [ $$ec -eq 1 ]; then failed=$$((failed+1)); faillist="$$faillist $${t##*/}(exit1)"; \
+	      echo "*** SUITE FAILED: $${t##*/} completed with failed assertions (counted) ***" \
+	        >> build/test.log; \
+	    else \
 	      crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
 	      echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
 	        >> build/test.log; \
@@ -101,9 +105,10 @@ test: $(UNIT_BINS)
 	echo "======== summary ========"; \
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
 	     END{printf "TOTAL: %d passed, %d failed, %d skipped (fast suites; run make test-slow and make test-cpu for the rest)\n",p,f,s}' build/test.log; \
+	if [ $$failed -ne 0 ]; then echo "FAILED SUITES ($$failed):$$faillist"; fi; \
 	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
 	if [ $$nochecks -ne 0 ]; then echo "SUITES THAT RAN NO CHECKS ($$nochecks):$$nclist"; fi; \
-	if [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$failed -ne 0 ] || [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
 	if [ $$nochecks -ne 0 ]; then echo "RESULT: no checks ran, nothing was verified"; exit 1; fi; \
 	echo "RESULT: all fast unit suites passed"
 
@@ -124,11 +129,15 @@ test-cpu: $(TEST_BIN) $(LORENZ_GATE)
 # Slow integration group: DOS format, LOAD/SAVE/NEW, near-full BAM, writeback,
 # and full IEC serial transactions. Same crash-visible aggregation as `make test`.
 test-slow: $(SLOW_BINS)
-	@rc=0; crashed=0; crashlist=""; nochecks=0; nclist=""; : > build/test-slow.log; \
+	@rc=0; crashed=0; crashlist=""; failed=0; faillist=""; nochecks=0; nclist=""; : > build/test-slow.log; \
 	for t in $(SLOW_BINS); do \
 	  if ./$$t slow >> build/test-slow.log 2>&1; then :; else \
 	    ec=$$?; rc=1; \
-	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; else \
+	    if [ $$ec -eq 2 ]; then nochecks=$$((nochecks+1)); nclist="$$nclist $${t##*/}"; \
+	    elif [ $$ec -eq 1 ]; then failed=$$((failed+1)); faillist="$$faillist $${t##*/}(exit1)"; \
+	      echo "*** SUITE FAILED: $${t##*/} completed with failed assertions (counted) ***" \
+	        >> build/test-slow.log; \
+	    else \
 	      crashed=$$((crashed+1)); crashlist="$$crashlist $${t##*/}(exit$$ec)"; \
 	      echo "*** SUITE CRASHED: $${t##*/} exited $$ec, its assertions are UNCOUNTED ***" \
 	        >> build/test-slow.log; \
@@ -139,9 +148,10 @@ test-slow: $(SLOW_BINS)
 	echo "======== summary ========"; \
 	awk '/passed,/{p+=$$2; f+=$$4; s+=$$6} \
 	     END{printf "TOTAL: %d passed, %d failed, %d skipped (slow suites only)\n",p,f,s}' build/test-slow.log; \
+	if [ $$failed -ne 0 ]; then echo "FAILED SUITES ($$failed):$$faillist"; fi; \
 	if [ $$crashed -ne 0 ]; then echo "CRASHED SUITES ($$crashed):$$crashlist"; fi; \
 	if [ $$nochecks -ne 0 ]; then echo "SUITES THAT RAN NO CHECKS ($$nochecks):$$nclist"; fi; \
-	if [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
+	if [ $$failed -ne 0 ] || [ $$crashed -ne 0 ]; then echo "RESULT: FAILURES"; exit 1; fi; \
 	if [ $$nochecks -ne 0 ]; then echo "RESULT: no checks ran, nothing was verified"; exit 1; fi; \
 	echo "RESULT: all slow suites passed"
 
