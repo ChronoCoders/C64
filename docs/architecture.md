@@ -59,3 +59,17 @@ the true per-zone bit rate (see [disk-drive.md](disk-drive.md)). A fastloader is
 timing contract between code running on both sides; if either side's timing were off,
 the transfer would desync. The same property means a fastloader is a sharp test of
 the model, and a good source of hard bugs.
+
+## The Lorenz gate
+
+`make test-cpu` runs the Wolfgang Lorenz CPU-conformance suite. The runner emits one
+canonical result line, and a small C gate compares it against a checked-in baseline;
+the target passes only when the frontier matches exactly. The recipe runs the gate
+first and the runner-exit check second, and that order is deliberate. A run can go
+wrong in three distinct ways, and each has to be caught by the mechanism that actually
+saw it: a wrong frontier dies on a semantic mismatch inside the gate; a missing
+canonical result also dies in the gate, before the exit check ever runs; and a runner
+that fails partway through while still printing a valid-looking canonical result dies
+on the exit check, which the gate alone would wave through. Checking the runner exit
+first would collapse the first two cases into a bare "runner failed" and hide which
+one occurred, so the gate goes first and the exit check backstops it.
