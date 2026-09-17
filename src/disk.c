@@ -131,6 +131,18 @@ static bool has_error_info;
 static uint8_t gcr_tracks[DISK_TRACKS][GCR_TRACK_MAXBYTES];
 static unsigned gcr_nbytes[DISK_TRACKS];
 
+// Staging for a candidate mount: the whole candidate (image, GCR rings, ids, error
+// info) is built here and copied to the authoritative globals above only after every
+// fallible step has succeeded, so a rejected mount cannot disturb the mounted disk.
+// Cost is one extra image plus one extra GCR ring set, statically allocated like the
+// authoritative buffers (about 434 KB total).
+static uint8_t stage_image[D64_STD_SIZE];
+static uint8_t stage_gcr[DISK_TRACKS][GCR_TRACK_MAXBYTES];
+static unsigned stage_nbytes[DISK_TRACKS];
+static uint8_t stage_id1, stage_id2;
+static uint8_t stage_error_info[DISK_TOTAL_SECTORS];
+static bool stage_has_error_info;
+
 // Byte offset of a sector in the .d64 (sectors laid out track 1 first, in order).
 static unsigned sector_offset(unsigned track, unsigned sector) {
     unsigned idx = 0;
@@ -148,11 +160,11 @@ static void build_sector(uint8_t *buf, unsigned *bitpos,
 
     uint8_t hdr[8];
     hdr[0] = 0x08u;  // header block id
-    hdr[1] = disk_header_checksum((uint8_t)sector, (uint8_t)track, disk_id2, disk_id1);
+    hdr[1] = disk_header_checksum((uint8_t)sector, (uint8_t)track, stage_id2, stage_id1);
     hdr[2] = (uint8_t)sector;
     hdr[3] = (uint8_t)track;
-    hdr[4] = disk_id2;
-    hdr[5] = disk_id1;
+    hdr[4] = stage_id2;
+    hdr[5] = stage_id1;
     hdr[6] = 0x0Fu;
     hdr[7] = 0x0Fu;
     uint8_t hdr_gcr[10];
@@ -165,7 +177,7 @@ static void build_sector(uint8_t *buf, unsigned *bitpos,
     uint8_t db[260];
     memset(db, 0, sizeof(db));
     db[0] = 0x07u;  // data block id
-    memcpy(&db[1], &image[sector_offset(track, sector)], 256u);
+    memcpy(&db[1], &stage_image[sector_offset(track, sector)], 256u);
     db[257] = disk_data_checksum(&db[1]);
     uint8_t data_gcr[325];
     gcr_encode(db, 260u, data_gcr);
@@ -177,59 +189,81 @@ static void build_sector(uint8_t *buf, unsigned *bitpos,
 static void build_track(unsigned track) {
     unsigned zone = disk_zone_of_track(track);
     unsigned nbytes = zone_bytes_per_rev(zone);
-    uint8_t *buf = gcr_tracks[track - 1u];
+    uint8_t *buf = stage_gcr[track - 1u];
     memset(buf, 0x55u, GCR_TRACK_MAXBYTES);  // default filler is gap
     unsigned bitpos = 0;
     unsigned nsec = disk_sectors_in_track(track);
     for (unsigned s = 0; s < nsec; s++) { build_sector(buf, &bitpos, track, s); }
     // Remaining bytes up to one revolution stay as $55 gap (set by memset).
-    gcr_nbytes[track - 1u] = nbytes;
+    stage_nbytes[track - 1u] = nbytes;
 }
 
-static bool mount_validate_and_build(void) {
+// Prepare the candidate GCR rings and ids from stage_image. Returns false to reject a
+// candidate; a future content check belongs here, before any authoritative write.
+static bool mount_prepare(void) {
     // Disk id lives in the BAM at track 18 sector 0, offset $A2/$A3.
     unsigned bam = sector_offset(18u, 0u);
-    disk_id1 = image[bam + 0xA2u];
-    disk_id2 = image[bam + 0xA3u];
+    stage_id1 = stage_image[bam + 0xA2u];
+    stage_id2 = stage_image[bam + 0xA3u];
     for (unsigned t = 1; t <= DISK_TRACKS; t++) { build_track(t); }
-    mounted = true;
     return true;
 }
 
-bool disk_mount_image(const uint8_t *data, size_t len) {
-    disk_unmount();
-    if (len != D64_STD_SIZE && len != D64_ERR_SIZE) { return false; }  // 35-track only
-    memcpy(image, data, D64_STD_SIZE);
-    has_error_info = (len == D64_ERR_SIZE);
+// Commit the prepared candidate to the authoritative globals. Every step is total, so
+// this is the single point at which the mounted disk changes. A NULL path is an
+// in-memory mount, which has nothing to write back.
+static void mount_commit(const char *path, size_t plen) {
+    memcpy(image, stage_image, sizeof image);
+    memcpy(gcr_tracks, stage_gcr, sizeof gcr_tracks);
+    memcpy(gcr_nbytes, stage_nbytes, sizeof gcr_nbytes);
+    disk_id1 = stage_id1;
+    disk_id2 = stage_id2;
+    has_error_info = stage_has_error_info;
     if (has_error_info) {
-        memcpy(error_info, &data[D64_STD_SIZE], DISK_TOTAL_SECTORS);
+        memcpy(error_info, stage_error_info, sizeof error_info);
     }
-    return mount_validate_and_build();
+    if (path != NULL) {
+        memcpy(mount_path, path, plen + 1u);
+        clean_path = true;
+    } else {
+        mount_path[0] = '\0';
+        clean_path = false;
+    }
+    mounted = true;
+}
+
+bool disk_mount_image(const uint8_t *data, size_t len) {
+    if (len != D64_STD_SIZE && len != D64_ERR_SIZE) { return false; }  // 35-track only
+    memcpy(stage_image, data, D64_STD_SIZE);
+    stage_has_error_info = (len == D64_ERR_SIZE);
+    if (stage_has_error_info) {
+        memcpy(stage_error_info, &data[D64_STD_SIZE], DISK_TOTAL_SECTORS);
+    }
+    if (!mount_prepare()) { return false; }
+    mount_commit(NULL, 0u);
+    return true;
 }
 
 bool disk_mount(const char *path) {
-    disk_unmount();
     // A path we cannot store cannot be written back later; reject it up front rather
     // than mounting a disk whose SAVE would be silently dropped on exit.
     size_t plen = strlen(path);
     if (plen >= sizeof(mount_path)) { return false; }
     FILE *f = fopen(path, "rb");
     if (!f) { return false; }
-    size_t n = fread(image, 1u, D64_STD_SIZE, f);
+    size_t n = fread(stage_image, 1u, D64_STD_SIZE, f);
     uint8_t err[DISK_TOTAL_SECTORS];
     size_t e = fread(err, 1u, DISK_TOTAL_SECTORS, f);  // optional error-info block
     int extra = fgetc(f);  // reject anything longer than either accepted size
     fclose(f);
     if (n != D64_STD_SIZE || extra != EOF) { return false; }
     if (e != 0u && e != DISK_TOTAL_SECTORS) { return false; }
-    has_error_info = (e == DISK_TOTAL_SECTORS);
-    if (has_error_info) {
-        memcpy(error_info, err, DISK_TOTAL_SECTORS);
+    stage_has_error_info = (e == DISK_TOTAL_SECTORS);
+    if (stage_has_error_info) {
+        memcpy(stage_error_info, err, DISK_TOTAL_SECTORS);
     }
-    if (!mount_validate_and_build()) { return false; }
-    // Remember where a clean 35-track image came from (path length checked up front).
-    memcpy(mount_path, path, plen + 1u);
-    clean_path = true;
+    if (!mount_prepare()) { return false; }
+    mount_commit(path, plen);
     return true;
 }
 

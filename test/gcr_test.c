@@ -100,17 +100,31 @@ static void test_checksums(void) {
     CHECK_EQ(disk_data_checksum(data), 0u, "XOR of 0..255 is 0");
 }
 
-// Mount validation: only a standard 35-track, 174848-byte image is accepted; the
-// short, long, and empty cases are rejected cleanly with no disk left mounted.
+// Mount validation: only a standard 35-track, 174848-byte image is accepted. The
+// empty, short, and long cases are each rejected, and a rejected replacement leaves
+// the previously mounted disk in place, unchanged (C64-004 atomicity).
 static void test_mount_validation(void) {
     static uint8_t img[D64_STD_SIZE];
-    memset(img, 0, sizeof(img));
+    memset(img, 0xD1u, sizeof(img));
     CHECK_EQ(disk_mount_image(img, D64_STD_SIZE) ? 1 : 0, 1, "174848-byte image mounts");
     CHECK_EQ(disk_present() ? 1 : 0, 1, "disk present after a valid mount");
-    CHECK_EQ(disk_mount_image(img, 0u) ? 1 : 0, 0, "empty image is rejected");
-    CHECK_EQ(disk_present() ? 1 : 0, 0, "no disk after a rejected mount");
-    CHECK_EQ(disk_mount_image(img, D64_STD_SIZE - 1u) ? 1 : 0, 0, "short image rejected");
-    CHECK_EQ(disk_mount_image(img, D64_STD_SIZE + 1u) ? 1 : 0, 0, "long image rejected");
+    uint8_t d1[256];
+    CHECK(disk_read_sector(1u, 0u, d1), "D1 sector (1,0) reads back");
+
+    const size_t bad[] = {0u, D64_STD_SIZE - 1u, D64_STD_SIZE + 1u};
+    const char *label[] = {"empty", "short", "long"};
+    for (unsigned k = 0; k < 3u; k++) {
+        char msg[72];
+        snprintf(msg, sizeof msg, "%s image is rejected", label[k]);
+        CHECK_EQ(disk_mount_image(img, bad[k]) ? 1 : 0, 0, msg);
+        uint8_t after[256];
+        snprintf(msg, sizeof msg, "D1 still present after the %s rejection", label[k]);
+        CHECK(disk_present(), msg);
+        snprintf(msg, sizeof msg, "D1 still readable after the %s rejection", label[k]);
+        CHECK(disk_read_sector(1u, 0u, after), msg);
+        snprintf(msg, sizeof msg, "the surviving disk is still D1 after the %s rejection", label[k]);
+        CHECK(memcmp(after, d1, sizeof after) == 0, msg);
+    }
     disk_unmount();
     CHECK_EQ(disk_present() ? 1 : 0, 0, "unmount leaves no disk");
 }

@@ -814,12 +814,22 @@ static void test_bam_near_full(void) {
 // front rather than silently mounting a disk whose SAVE would be dropped on exit.
 // Source: the disk_mount length guard against sizeof(mount_path).
 static void test_mount_rejects_overlong_path(void) {
+    static uint8_t prior[D64_STD_SIZE];
+    memset(prior, 0xC4u, sizeof prior);
+    CHECK(disk_mount_image(prior, sizeof prior), "a valid disk is mounted before the rejection");
+    uint8_t before[256];
+    CHECK(disk_read_sector(1u, 0u, before), "the prior disk reads back");
+
     static char longpath[5000];
     memset(longpath, 'x', sizeof(longpath) - 1u);
     longpath[sizeof(longpath) - 1u] = '\0';   // 4999 chars, past the store limit
     CHECK_EQ(disk_mount(longpath) ? 1 : 0, 0, "an over-length path is rejected by disk_mount");
-    CHECK_EQ(disk_present() ? 1 : 0, 0, "no disk is left mounted after the rejected mount");
-    CHECK_EQ(disk_writeback() ? 1 : 0, 0, "writeback is a no-op with nothing mounted");
+
+    uint8_t after[256];
+    CHECK(disk_present(), "the prior disk survives the rejected over-length mount");
+    CHECK(disk_read_sector(1u, 0u, after), "the prior disk is still readable after the rejection");
+    CHECK(memcmp(after, before, sizeof after) == 0, "the prior disk is unchanged after the rejection");
+    disk_unmount();
 }
 
 // A writeback that cannot complete must leave the on-disk original byte-identical.
@@ -872,6 +882,124 @@ static void test_writeback_preserves_original_on_failure(void) {
     remove(path);
 }
 
+// C64-004 control: a mount call that fails validation must not eject the disk already
+// mounted. disk_mount / disk_mount_image call disk_unmount as their first action, then
+// validate, so a rejected replacement leaves the drive empty. The control mounts a
+// distinctive D1, attempts a bad-length disk_mount_image (validated after the unmount),
+// and asserts D1 is still present and reads back unchanged. Fully in-memory, so it needs
+// no filesystem and no platform guard. Expected RED on the mounted-state assertion until
+// the mount entry points validate before unmounting.
+static void test_failed_remount_keeps_prior_disk(void) {
+    static uint8_t d1[D64_STD_SIZE], d2[D64_STD_SIZE];
+    memset(d1, 0xA1u, sizeof d1);
+    memset(d2, 0x5Eu, sizeof d2);
+
+    CHECK(disk_mount_image(d1, sizeof d1), "C64-004 fixture: D1 mounts");
+    CHECK(disk_present(), "C64-004 fixture: a disk is present after mounting D1");
+    uint8_t r1[256];
+    CHECK(disk_read_sector(1u, 0u, r1), "C64-004 fixture: D1 sector (1,0) reads back");
+
+    CHECK(disk_mount_image(d2, sizeof d2), "C64-004 sensitivity: D2 mounts");
+    uint8_t s2[256];
+    CHECK(disk_read_sector(1u, 0u, s2), "C64-004 sensitivity: D2 sector (1,0) reads back");
+    CHECK(memcmp(s2, r1, sizeof r1) != 0, "C64-004 sensitivity: D2 content differs from D1");
+    disk_unmount();
+    CHECK(!disk_present(), "C64-004 sensitivity: no disk present after unmount");
+
+    CHECK(disk_mount_image(d1, sizeof d1), "C64-004 fixture: D1 re-mounts");
+    CHECK(disk_read_sector(1u, 0u, r1), "C64-004 fixture: R1 re-read from D1");
+
+    // A bad length is rejected only after disk_unmount has already run (disk.c
+    // disk_mount_image: unmount at line 2, length check at line 3).
+    uint8_t bad[16];
+    memset(bad, 0xFFu, sizeof bad);
+    CHECK(!disk_mount_image(bad, sizeof bad), "C64-004: a bad-length replacement mount returns false");
+
+    uint8_t after[256];
+    memset(after, 0, sizeof after);
+    CHECK(disk_present(), "C64-004 invariant: D1 still present after a rejected replacement mount");
+    CHECK(disk_read_sector(1u, 0u, after), "C64-004 invariant: D1 still readable after a rejected mount");
+    CHECK(memcmp(after, r1, sizeof r1) == 0, "C64-004 invariant: the mounted disk is unchanged after a rejected mount");
+
+    disk_unmount();
+}
+
+// C64-004 control, disk_mount path. disk_mount also unmounts first (disk.c:211) then
+// validates, so a rejected replacement ejects the mounted disk. Two arms:
+//   A: a missing path fails at disk.c:217 (fopen), after the unmount.
+//   B: an oversized file whose candidate read at disk.c:219 writes D64_STD_SIZE bytes
+//      into the authoritative image buffer, then disk.c:224 rejects the error-info
+//      block size, after the unmount.
+// Observation covers the publicly reachable state: mounted (disk_present), the track
+// GCR bit count (disk_track_gcr), and decoded sector content (disk_read_sector). The
+// raw image buffer, clean_path, mount_path, disk_id and error_info have no public
+// getter, so arm B's image corruption is documented from source but not asserted.
+// Expected RED on the mounted-state assertions until the entry points validate before
+// unmounting and stop reading into the authoritative buffer.
+static void test_failed_path_mount_keeps_prior_disk(void) {
+    static uint8_t d1[D64_STD_SIZE], d2[D64_STD_SIZE];
+    memset(d1, 0xA1u, sizeof d1);
+    memset(d2, 0x5Eu, sizeof d2);
+
+    CHECK(disk_mount_image(d1, sizeof d1), "C64-004B fixture: D1 mounts");
+    CHECK(disk_present(), "C64-004B fixture: a disk is present after mounting D1");
+    uint8_t r1[256];
+    CHECK(disk_read_sector(1u, 0u, r1), "C64-004B fixture: D1 sector (1,0) reads back");
+    unsigned r1bits = 0;
+    disk_track_gcr(1u, &r1bits);
+    CHECK(r1bits > 0u, "C64-004B fixture: D1 track 1 has GCR bits");
+
+    CHECK(disk_mount_image(d2, sizeof d2), "C64-004B sensitivity: D2 mounts");
+    uint8_t s2[256];
+    CHECK(disk_read_sector(1u, 0u, s2), "C64-004B sensitivity: D2 sector (1,0) reads back");
+    CHECK(memcmp(s2, r1, sizeof r1) != 0, "C64-004B sensitivity: D2 content differs from D1");
+    disk_unmount();
+    CHECK(!disk_present(), "C64-004B sensitivity: no disk present after unmount");
+
+    CHECK(disk_mount_image(d1, sizeof d1), "C64-004B fixture: D1 re-mounts for arm A");
+    CHECK(disk_read_sector(1u, 0u, r1), "C64-004B fixture: R1 re-read for arm A");
+    CHECK(!disk_mount("build/c64_c004_missing.d64"), "C64-004B arm A: mounting a missing path returns false");
+    {
+        uint8_t after[256];
+        memset(after, 0, sizeof after);
+        unsigned bits = 0;
+        disk_track_gcr(1u, &bits);
+        CHECK(disk_present(), "C64-004B arm A: D1 still present after a failed open");
+        CHECK_EQ((long long)bits, (long long)r1bits, "C64-004B arm A: track 1 GCR bit count unchanged");
+        CHECK(disk_read_sector(1u, 0u, after), "C64-004B arm A: D1 still readable after a failed open");
+        CHECK(memcmp(after, r1, sizeof r1) == 0, "C64-004B arm A: mounted disk unchanged after a failed open");
+    }
+
+    CHECK(disk_mount_image(d1, sizeof d1), "C64-004B fixture: D1 re-mounts for arm B");
+    CHECK(disk_read_sector(1u, 0u, r1), "C64-004B fixture: R1 re-read for arm B");
+    const char *tmp = "build/c64_c004b_oversized.d64";
+    remove(tmp);
+    bool wrote = false;
+    FILE *tf = fopen(tmp, "wb");
+    if (tf) {
+        static uint8_t big[D64_STD_SIZE + 100u];
+        memset(big, 0xFFu, sizeof big);
+        wrote = fwrite(big, 1u, sizeof big, tf) == sizeof big;
+        if (fclose(tf) != 0) {
+            wrote = false;
+        }
+    }
+    CHECK(wrote, "C64-004B arm B fixture: oversized candidate file written");
+    if (wrote) {
+        CHECK(!disk_mount(tmp), "C64-004B arm B: mounting an oversized image returns false");
+        uint8_t after[256];
+        memset(after, 0, sizeof after);
+        unsigned bits = 0;
+        disk_track_gcr(1u, &bits);
+        CHECK(disk_present(), "C64-004B arm B: D1 still present after a rejected oversized mount");
+        CHECK_EQ((long long)bits, (long long)r1bits, "C64-004B arm B: track 1 GCR bit count unchanged");
+        CHECK(disk_read_sector(1u, 0u, after), "C64-004B arm B: D1 still readable after a rejected oversized mount");
+        CHECK(memcmp(after, r1, sizeof r1) == 0, "C64-004B arm B: mounted disk unchanged, no candidate bytes leaked into sector");
+    }
+    remove(tmp);
+    disk_unmount();
+}
+
 // Hardware-level unit checks: sub-second, no DOS command path.
 static void drive_fast(const char *synth) {
     test_boot_from_rom_reaches_idle(synth);
@@ -889,6 +1017,8 @@ static void drive_fast(const char *synth) {
     test_d64_error_info_variant();
     test_mount_rejects_overlong_path();
     test_writeback_preserves_original_on_failure();
+    test_failed_remount_keeps_prior_disk();
+    test_failed_path_mount_keeps_prior_disk();
 }
 
 // DOS-integration checks (LOAD/SAVE/NEW/BAM/writeback through the GCR surface):
