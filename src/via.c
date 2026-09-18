@@ -29,6 +29,7 @@
 #define ACR_T2_PULSE 0x20u
 #define PCR_CA1_POS 0x01u
 #define PCR_CB1_POS 0x10u
+#define PB6 0x40u  // Port B bit 6, the T2 pulse-count input
 
 // Bit 7 of the IFR is a summary: set when any enabled flag (IFR & IER, bits 0-6)
 // is set, and never written independently.
@@ -38,6 +39,12 @@ static void via_update_irq(VIA6522 *v) {
     } else {
         v->ifr = (uint8_t)(v->ifr & ~VIA_IRQ_ANY);
     }
+}
+
+// Effective Port B pin level: output bits (DDRB=1) follow ORB, input bits follow the
+// external pins. The single source for both the port read and T2 pulse counting.
+static uint8_t via_pb_pins(const VIA6522 *v) {
+    return (uint8_t)((v->orb & v->ddrb) | (v->pb_in & (uint8_t)~v->ddrb));
 }
 
 void via_reset(VIA6522 *v) {
@@ -52,6 +59,7 @@ void via_reset(VIA6522 *v) {
     v->cb1 = true;
     v->pa_in = 0xFFu;
     v->pb_in = 0xFFu;
+    v->pb6 = (via_pb_pins(v) & PB6) != 0;  // seed the edge sample from the reset pin level
 }
 
 uint8_t via_read(VIA6522 *v, uint8_t reg) {
@@ -59,7 +67,7 @@ uint8_t via_read(VIA6522 *v, uint8_t reg) {
         case R_ORB:
             v->ifr = (uint8_t)(v->ifr & ~VIA_IRQ_CB1);  // reading port B clears CB1
             via_update_irq(v);
-            return (uint8_t)((v->orb & v->ddrb) | (v->pb_in & (uint8_t)~v->ddrb));
+            return via_pb_pins(v);
         case R_ORA:
             v->ifr = (uint8_t)(v->ifr & ~(VIA_IRQ_CA1 | VIA_IRQ_CA2));
             via_update_irq(v);
@@ -179,6 +187,20 @@ void via_write(VIA6522 *v, uint8_t reg, uint8_t val) {
     }
 }
 
+// Clock Timer 2 by one tick: decrement, or on underflow reload and raise the flag once
+// (one-shot, guarded by t2_undf_pending). Shared by the timed and pulse-count modes.
+static void via_t2_clock(VIA6522 *v) {
+    if (v->t2c == 0) {
+        v->t2c = 0xFFFFu;
+        if (!v->t2_undf_pending) {
+            v->ifr |= VIA_IRQ_T2;
+            v->t2_undf_pending = true;
+        }
+    } else {
+        v->t2c = (uint16_t)(v->t2c - 1);
+    }
+}
+
 void via_step(VIA6522 *v) {
     // Timer 1 counts down every phi2. On underflow (passing through 0) the T1 flag
     // is set; in free-run it reloads from the latch and toggles PB7 each time, in
@@ -198,19 +220,17 @@ void via_step(VIA6522 *v) {
         v->t1c = (uint16_t)(v->t1c - 1);
     }
 
-    // Timer 2 timed one-shot (ACR bit 5 = 0): counts down phi2 and raises the T2
-    // flag once at underflow. Pulse counting on PB6 (bit 5 = 1) is not driven here.
-    if ((v->acr & ACR_T2_PULSE) == 0) {
-        if (v->t2c == 0) {
-            v->t2c = 0xFFFFu;
-            if (!v->t2_undf_pending) {
-                v->ifr |= VIA_IRQ_T2;
-                v->t2_undf_pending = true;
-            }
-        } else {
-            v->t2c = (uint16_t)(v->t2c - 1);
-        }
+    // Timer 2: timed one-shot (ACR bit 5 = 0) counts down every phi2; pulse-count mode
+    // (bit 5 = 1) instead clocks T2 on each PB6 high-to-low transition. The two are
+    // mutually exclusive. The sampled PB6 level is stored every step regardless of mode
+    // so a mode switch does not leave a stale sample that fabricates an edge.
+    bool pb6_now = (via_pb_pins(v) & PB6) != 0;
+    if (v->acr & ACR_T2_PULSE) {
+        if (v->pb6 && !pb6_now) { via_t2_clock(v); }
+    } else {
+        via_t2_clock(v);
     }
+    v->pb6 = pb6_now;
 
     via_update_irq(v);
 }

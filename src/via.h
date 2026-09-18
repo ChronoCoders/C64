@@ -42,6 +42,7 @@ typedef struct {
     uint8_t ier;         // interrupt enable (bit 7 reads 1)
 
     bool ca1, cb1;       // last sampled handshake input levels, for edge detection
+    bool pb6;            // last sampled PB6 pin level, for T2 pulse-count edge detection
 } VIA6522;
 
 void via_reset(VIA6522 *v);

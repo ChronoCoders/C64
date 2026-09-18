@@ -20,6 +20,9 @@
 #define R_IFR 0xDu
 #define R_IER 0xEu
 
+#define ACR_T2_PULSE 0x20u  // ACR bit 5 = 1: T2 counts PB6 pulses
+#define PB6 0x40u           // pb_in bit 6 is the PB6 pin
+
 // Port read composition: output bits (DDR=1) read the output register, input bits
 // (DDR=0) read the pin level. Datasheet, port A/B description.
 static void test_port_direction_and_read(void) {
@@ -156,6 +159,137 @@ static void test_cb1_edge_interrupt(void) {
     CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_CB1, VIA_IRQ_CB1, "rising CB1 edge sets the flag");
 }
 
+// Timer 2 PB6 pulse counter (ACR bit 5 = 1): T2 counts high-to-low transitions on
+// PB6 instead of phi2, underflows once like the one-shot, and does not re-arm until
+// T2C-H is rewritten. Datasheet, Timer 2 pulse counting. pb_in bit 6 is PB6, high
+// after reset; the fixture drives it explicitly so the first falling edge is clear.
+static void test_timer2_pulse_count(void) {
+    VIA6522 v;
+
+    // Positive control: in timed mode the fixture drives the chip and T2 counts phi2.
+    via_reset(&v);
+    via_write(&v, R_ACR, 0x00u);
+    via_write(&v, R_T2CL, 0x10u);
+    via_write(&v, R_T2CH, 0x00u);
+    uint8_t pc0 = via_read(&v, R_T2CL);
+    via_step(&v);
+    uint8_t pc1 = via_read(&v, R_T2CL);
+    CHECK_EQ(pc1, (uint8_t)(pc0 - 1u), "positive control: timed T2 decrements on via_step");
+
+    // 1. Switching to pulse mode stops phi2 counting.
+    via_reset(&v);
+    via_write(&v, R_ACR, 0x00u);
+    via_write(&v, R_T2CL, 0x20u);
+    via_write(&v, R_T2CH, 0x00u);
+    v.pb_in |= PB6;
+    uint8_t a0 = via_read(&v, R_T2CL);
+    via_step(&v);
+    uint8_t a1 = via_read(&v, R_T2CL);
+    CHECK_EQ(a1, (uint8_t)(a0 - 1u), "1a: T2 counts phi2 in timed mode before the switch");
+    via_write(&v, R_ACR, ACR_T2_PULSE);
+    uint8_t b0 = via_read(&v, R_T2CL);
+    for (int i = 0; i < 4; i++) { via_step(&v); }  // PB6 held high
+    uint8_t b1 = via_read(&v, R_T2CL);
+    CHECK_EQ(b1, b0, "1b: switching to pulse mode stops phi2 counting");
+
+    // 2-5. Edge behaviour on one continuous counter.
+    via_reset(&v);
+    via_write(&v, R_ACR, ACR_T2_PULSE);
+    via_write(&v, R_T2CL, 0x20u);
+    via_write(&v, R_T2CH, 0x00u);
+    v.pb_in |= PB6;
+    via_step(&v);  // establish PB6 high, no edge
+    uint8_t c_before = via_read(&v, R_T2CL);
+    v.pb_in &= (uint8_t)~PB6;
+    via_step(&v);
+    uint8_t c_fall = via_read(&v, R_T2CL);
+    CHECK_EQ(c_fall, (uint8_t)(c_before - 1u), "2: one PB6 falling edge decrements T2 by one");
+    via_step(&v);  // PB6 still low
+    uint8_t c_hold = via_read(&v, R_T2CL);
+    CHECK_EQ(c_hold, c_fall, "3: holding PB6 low does not decrement again");
+    v.pb_in |= PB6;
+    via_step(&v);
+    uint8_t c_rise = via_read(&v, R_T2CL);
+    CHECK_EQ(c_rise, c_hold, "4: a rising PB6 edge does not decrement");
+    v.pb_in &= (uint8_t)~PB6;
+    via_step(&v);
+    uint8_t c_fall2 = via_read(&v, R_T2CL);
+    CHECK_EQ(c_fall2, (uint8_t)(c_rise - 1u), "5: the edge detector rearms; the next falling edge decrements");
+
+    // 6. Underflow sets the T2 flag and raises IRQ when enabled.
+    via_reset(&v);
+    via_write(&v, R_ACR, ACR_T2_PULSE);
+    via_write(&v, R_IER, (uint8_t)(0x80u | VIA_IRQ_T2));
+    via_write(&v, R_T2CL, 0x02u);
+    via_write(&v, R_T2CH, 0x00u);
+    v.pb_in |= PB6;
+    via_step(&v);
+    for (int i = 0; i < 3; i++) {  // 2 -> 1 -> 0 -> underflow
+        v.pb_in |= PB6; via_step(&v);
+        v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    }
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, VIA_IRQ_T2, "6: a PB6 underflow sets the T2 flag");
+    CHECK(via_irq(&v), "6: a PB6 underflow raises IRQ when T2 is enabled in IER");
+
+    // 7. One-shot in pulse mode: the timer does not re-arm itself. Clear the flag, then
+    // drive a full second wrap (65536 falling edges) without rewriting T2C-H: the flag
+    // must stay clear. Then writing T2C-H re-arms it and the next underflow sets it again.
+    via_write(&v, R_IFR, VIA_IRQ_T2);
+    for (int i = 0; i < 65536; i++) {
+        v.pb_in |= PB6; via_step(&v);
+        v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    }
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, 0, "7: no re-arm; the second wrap does not re-set the T2 flag");
+    CHECK(!via_irq(&v), "7: no re-arm; the second wrap does not raise IRQ");
+    via_write(&v, R_T2CL, 0x02u);
+    via_write(&v, R_T2CH, 0x00u);  // rewriting T2C-H re-arms the one-shot
+    for (int i = 0; i < 3; i++) {
+        v.pb_in |= PB6; via_step(&v);
+        v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    }
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, VIA_IRQ_T2, "7: T2C-H re-arms; the next underflow sets the flag");
+    CHECK(via_irq(&v), "7: T2C-H re-arms; the next underflow raises IRQ");
+}
+
+// T2 must count the effective Port B pin level, not the raw external input. With PB6
+// configured as an output (DDRB bit 6 = 1), the pin follows ORB6 and the external
+// input is masked out. pb_in bit 6 is held at the opposite of ORB6 throughout, so an
+// implementation that read pb_in directly would see no transitions at all.
+static void test_timer2_pulse_output_pin(void) {
+    VIA6522 v;
+    via_reset(&v);
+    via_write(&v, R_ACR, ACR_T2_PULSE);
+    via_write(&v, R_T2CL, 0x20u);
+    via_write(&v, R_T2CH, 0x00u);
+    via_write(&v, R_DDRB, PB6);   // PB6 output, so the pin follows ORB6
+    via_write(&v, R_ORB, PB6);    // ORB6 high -> effective PB6 high
+    v.pb_in &= (uint8_t)~PB6;     // external input PB6 low: opposite of ORB6, held constant
+
+    uint8_t d0 = via_read(&v, R_T2CL);
+    for (int i = 0; i < 3; i++) { via_step(&v); }  // ORB6 high, no edge
+    uint8_t d1 = via_read(&v, R_T2CL);
+    CHECK_EQ(d1, d0, "out-1: ORB6 high, no edge, T2 does not decrement");
+
+    via_write(&v, R_ORB, 0x00u);  // ORB6 high -> low: effective PB6 falling edge
+    via_step(&v);
+    uint8_t d2 = via_read(&v, R_T2CL);
+    CHECK_EQ(d2, (uint8_t)(d1 - 1u), "out-2: ORB6 high-to-low decrements T2 by one");
+
+    via_step(&v);                 // ORB6 still low
+    uint8_t d3 = via_read(&v, R_T2CL);
+    CHECK_EQ(d3, d2, "out-3: ORB6 held low does not decrement again");
+
+    via_write(&v, R_ORB, PB6);    // ORB6 low -> high
+    via_step(&v);
+    uint8_t d4 = via_read(&v, R_T2CL);
+    CHECK_EQ(d4, d3, "out-4: ORB6 low-to-high does not decrement");
+
+    via_write(&v, R_ORB, 0x00u);  // ORB6 high -> low again
+    via_step(&v);
+    uint8_t d5 = via_read(&v, R_T2CL);
+    CHECK_EQ(d5, (uint8_t)(d4 - 1u), "out-5: the next ORB6 high-to-low decrements again");
+}
+
 int main(void) {
     TEST_BEGIN("via");
     test_port_direction_and_read();
@@ -164,6 +298,8 @@ int main(void) {
     test_timer1_one_shot();
     test_timer1_free_run();
     test_timer2_one_shot();
+    test_timer2_pulse_count();
+    test_timer2_pulse_output_pin();
     test_ca1_edge_interrupt();
     test_cb1_edge_interrupt();
     return TEST_SUMMARY("via");
