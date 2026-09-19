@@ -73,3 +73,19 @@ that fails partway through while still printing a valid-looking canonical result
 on the exit check, which the gate alone would wave through. Checking the runner exit
 first would collapse the first two cases into a bare "runner failed" and hide which
 one occurred, so the gate goes first and the exit check backstops it.
+
+## External CIA CNT
+
+The CIA's CNT pin is an external clock input to the timers: Timer A and Timer B can
+count its low-to-high transitions in place of phi2, and Timer B can gate Timer A
+underflows on its level. The pin enters through `cia_set_cnt(unsigned n, bool level)`,
+which records the level only; the CIA clock samples it and interprets the selected
+mode. This is a real chip-pin API, kept even though nothing in the modelled machine
+calls it. The user port that would drive CNT is not modelled, so the pin has no
+producer here, but it belongs to the chip and is not dead code to be removed later.
+
+CNT is sampled at CIA clock granularity. A pulse that completes between two clocks,
+low to high and back, is not seen, where the real 6526 latches the transition; that
+narrow divergence is a known limitation rather than modelled behaviour. CNT also
+clocks the serial shift register on the real chip, and that path is outside this
+implementation.

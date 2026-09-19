@@ -413,6 +413,202 @@ static void test_iec_composition(void) {
     cia_iec_device_pull(0);
 }
 
+// ---- External CNT timer input (C64-006) -----------------------------------
+// Partial-fix red: cia_set_cnt and the private CNT state exist (interface
+// enabling), but CNT-dependent counting is not implemented, so the timer stays
+// frozen in the CNT input modes. The "does not count" assertions therefore pass
+// vacuously (nothing moves); the "counts one" and mode-11-gated assertions are
+// the meaningful reds. CNT edges are delivered through cia_set_cnt and sampled
+// by cia_clock; counts are read through the timer inspection hooks, allowing the
+// existing count pipeline to settle before each read.
+#define CNT_SETTLE 8
+
+static void test_cnt_setter_isolation(void) {
+    cia_init();
+    cia1_write(TALO, 0x40);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x11);  // force-load + start, phi2
+    for (int i = 0; i < 6; i++) { cia_clock(); }
+    uint16_t a = cia_timer_a(0);
+    uint16_t b = cia_timer_b(0);
+    cia_set_cnt(0, false);
+    cia_set_cnt(0, true);
+    cia_set_cnt(0, false);
+    CHECK_EQ(cia_timer_a(0), a, "setter isolation: a CNT change without a clock does not advance Timer A");
+    CHECK_EQ(cia_timer_b(0), b, "setter isolation: a CNT change without a clock does not advance Timer B");
+}
+
+static void test_cnt_ctrl_a_phi2(void) {
+    cia_init();
+    cia1_write(TALO, 0xFF);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x11);  // force-load + start, phi2 (INMODE clear)
+    cia_clock();
+    uint16_t start = cia_timer_a(0);
+    for (int i = 0; i < 8; i++) { cia_clock(); }
+    CHECK(cia_timer_a(0) != start, "A: Timer A advances on phi2 with CRA bit5 clear");
+}
+
+static void test_cnt_ctrl_b_timer_a(void) {
+    cia_init();
+    cia1_write(TALO, 0xFF);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x31);  // force-load + start + INMODE (count CNT)
+    cia_set_cnt(0, true);
+    for (int i = 0; i < 6; i++) { cia_clock(); }
+    uint16_t c = cia_timer_a(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), c, "B: phi2 clocks do not count in CNT mode");
+    c = cia_timer_a(0);
+    cia_set_cnt(0, false);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), c, "B: a high-to-low CNT transition does not count");
+    c = cia_timer_a(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), c, "B: a held-low CNT level does not count");
+    c = cia_timer_a(0);
+    cia_set_cnt(0, true);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), (uint16_t)(c - 1), "B: a low-to-high CNT transition counts exactly one");
+    c = cia_timer_a(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), c, "B: a held-high CNT level does not repeat");
+    c = cia_timer_a(0);
+    cia_set_cnt(0, false);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    cia_set_cnt(0, true);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), (uint16_t)(c - 1), "B: a second low-to-high transition counts exactly one more");
+}
+
+static void test_cnt_ctrl_c_timer_b(void) {
+    cia_init();
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia1_write(CRB, 0x31);  // force-load + start + INMODE 01 (count CNT)
+    cia_set_cnt(0, true);
+    for (int i = 0; i < 6; i++) { cia_clock(); }
+    uint16_t c = cia_timer_b(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), c, "C: phi2 clocks do not count in CRB=01 CNT mode");
+    c = cia_timer_b(0);
+    cia_set_cnt(0, false);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), c, "C: a high-to-low CNT transition does not count");
+    c = cia_timer_b(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), c, "C: a held-low CNT level does not count");
+    c = cia_timer_b(0);
+    cia_set_cnt(0, true);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), (uint16_t)(c - 1), "C: a low-to-high CNT transition counts exactly one");
+    c = cia_timer_b(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), c, "C: a held-high CNT level does not repeat");
+}
+
+static int cnt_cascade_decrement(uint8_t crb, bool cnt_level) {
+    cia_init();
+    cia1_write(TALO, 0x02);
+    cia1_write(TAHI, 0x00);
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia_set_cnt(0, cnt_level);
+    cia1_write(CRB, crb);
+    cia1_write(CRA, 0x11);  // force-load + start, phi2 (Timer A underflows repeatedly)
+    uint16_t tb_start = cia_timer_b(0);
+    for (int i = 0; i < 60; i++) { cia_clock(); }
+    return (int)tb_start - (int)cia_timer_b(0);
+}
+
+static void test_cnt_ctrl_d_cascade(void) {
+    int lo = cnt_cascade_decrement(0x41, false);  // mode 10 + start, CNT low
+    int hi = cnt_cascade_decrement(0x41, true);   // mode 10 + start, CNT high
+    CHECK(lo > 0, "D: mode 10 cascade counts Timer A underflows");
+    CHECK_EQ(lo, hi, "D: mode 10 cascade is independent of the CNT level");
+}
+
+static void test_cnt_ctrl_e_gated(void) {
+    int hi = cnt_cascade_decrement(0x61, true);   // mode 11 + start, CNT high
+    int lo = cnt_cascade_decrement(0x61, false);  // mode 11 + start, CNT low
+    CHECK(hi > 0, "E: mode 11 counts Timer A underflows while CNT is high");
+    CHECK_EQ(lo, 0, "E: mode 11 does not count while CNT is low");
+
+    cia_init();
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia_set_cnt(0, false);
+    cia1_write(CRB, 0x61);  // mode 11 + start; Timer A not started, so no underflows
+    uint16_t tb0 = cia_timer_b(0);
+    for (int k = 0; k < 5; k++) {
+        cia_set_cnt(0, true);
+        for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+        cia_set_cnt(0, false);
+        for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    }
+    CHECK_EQ(cia_timer_b(0), tb0, "E: CNT edges alone do not count in mode 11 (CNT is a gate, not the source)");
+}
+
+static void test_cnt_ctrl_f_reset_default(void) {
+    cia_init();  // CNT defaults high; cia_set_cnt is deliberately not called
+    cia1_write(TALO, 0x02);
+    cia1_write(TAHI, 0x00);
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia1_write(CRB, 0x61);  // mode 11 + start
+    cia1_write(CRA, 0x11);  // force-load + start, phi2
+    uint16_t tb_start = cia_timer_b(0);
+    for (int i = 0; i < 60; i++) { cia_clock(); }
+    CHECK(cia_timer_b(0) < tb_start, "F: after reset CNT defaults high, so mode 11 gates the cascade count");
+}
+
+// The previously sampled CNT level must update on every clock, not only while a
+// CNT mode is selected. Otherwise a CNT change during another mode leaves a stale
+// sample and the first CNT-mode clock replays an edge that already happened. This
+// assertion has no pre-fix red of its own; its evidence is mutant 8.
+static void test_cnt_prev_updated_every_clock(void) {
+    cia_init();
+    cia1_write(TALO, 0xFF);
+    cia1_write(TAHI, 0x00);
+    cia1_write(CRA, 0x31);  // CNT mode + start + force-load
+    cia_set_cnt(0, false);
+    for (int i = 0; i < 6; i++) { cia_clock(); }  // CNT low sampled into cnt_prev
+    cia1_write(CRA, 0x00);  // non-CNT mode (phi2), stopped
+    cia_set_cnt(0, true);   // CNT rises while the non-CNT mode is active
+    for (int i = 0; i < 4; i++) { cia_clock(); }  // an every-clock update absorbs it
+    cia1_write(CRA, 0x21);  // back to CNT mode + start (counter preserved)
+    uint16_t base = cia_timer_a(0);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_a(0), base, "prev CNT sampled every clock: entering CNT mode does not replay a stale edge");
+}
+
+// CRB bit 0 is a plain START/STOP for Timer B; the input-source bits do not
+// change that. A stopped Timer B counts from no source, CNT edge or gated cascade.
+static void test_cnt_stopped_source(void) {
+    cia_init();
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia1_write(CRB, 0x30);  // force-load + INMODE 01, START clear
+    cia_set_cnt(0, false);
+    for (int i = 0; i < 6; i++) { cia_clock(); }
+    uint16_t base = cia_timer_b(0);
+    cia_set_cnt(0, true);
+    for (int i = 0; i < CNT_SETTLE; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), base, "stopped source: CRB=01 with START clear does not count a rising CNT");
+
+    cia_init();
+    cia1_write(TALO, 0x02);
+    cia1_write(TAHI, 0x00);
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia_set_cnt(0, true);   // CNT high: the mode 11 gate is open
+    cia1_write(CRB, 0x70);  // force-load + mode 11, START clear
+    cia1_write(CRA, 0x11);  // Timer A force-load + start, phi2 (underflows repeatedly)
+    uint16_t tb_start = cia_timer_b(0);
+    for (int i = 0; i < 60; i++) { cia_clock(); }
+    CHECK_EQ(cia_timer_b(0), tb_start, "stopped source: CRB=11 with START clear does not count a Timer A underflow");
+}
+
 int main(void) {
     TEST_BEGIN("cia");
     test_timer_a_phi2_pattern();
@@ -431,5 +627,14 @@ int main(void) {
     test_tod_chain_and_latch();
     test_serial_shift();
     test_iec_composition();
+    test_cnt_setter_isolation();
+    test_cnt_ctrl_a_phi2();
+    test_cnt_ctrl_b_timer_a();
+    test_cnt_ctrl_c_timer_b();
+    test_cnt_ctrl_d_cascade();
+    test_cnt_ctrl_e_gated();
+    test_cnt_ctrl_f_reset_default();
+    test_cnt_prev_updated_every_clock();
+    test_cnt_stopped_source();
     return TEST_SUMMARY("cia");
 }

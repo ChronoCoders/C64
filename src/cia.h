@@ -36,6 +36,10 @@ void cia_key_set(unsigned row, unsigned col, bool pressed);
 void cia_key_reset(void);
 void cia_joy_set(unsigned port, uint8_t low_mask);  // port 0 = joy1, 1 = joy2
 void cia_restore_set(bool pressed);
+// External CNT pin level for CIA n (0=CIA1, 1=CIA2). A real chip pin; the modelled
+// C64 has no user port, so nothing in this repository drives it. Records the pin
+// level only; the CIA clock samples it for the CNT-dependent timer input modes.
+void cia_set_cnt(unsigned n, bool level);
 
 // TOD clock, IEC bus, VIC bank (Phase 5c). cia_tod_tick advances a CIA's TOD
 // by one tenth directly (tests); cia_iec_device_pull simulates an IEC device

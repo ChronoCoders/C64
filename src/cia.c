@@ -65,7 +65,9 @@
 #define CRA_SPMODE 0x40u        // serial port: 0 = input, 1 = output (Timer A)
 #define CRA_TODIN 0x80u         // TOD input: 0 = 60 Hz, 1 = 50 Hz
 #define CRB_INMODE_MASK 0x60u   // bits 6-5 select Timer B input
-#define CRB_INMODE_CASCADE 0x40u  // 10 = count Timer A underflows
+#define CRB_INMODE_CNT 0x20u       // 01 = count positive CNT transitions
+#define CRB_INMODE_CASCADE 0x40u   // 10 = count Timer A underflows
+#define CRB_INMODE_CNT_GATED 0x60u // 11 = count Timer A underflows while CNT is high
 #define CRB_ALARM 0x80u         // TOD register writes target the alarm
 
 // IEC serial bus lines on CIA2 Port A (C64 side). Out bits drive through
@@ -131,6 +133,8 @@ typedef struct {
     uint8_t sr_bits;      // bits left to shift out
     bool sr_active;       // a byte is shifting out
     bool sr_cnt;          // internal CNT toggle for output serial
+    bool cnt;             // external CNT pin level, set by cia_set_cnt
+    bool cnt_prev;        // last sampled CNT level, for rising-edge detection
 } CIA;
 
 static CIA cia[2];
@@ -282,8 +286,13 @@ static void serial_ta_underflow(CIA *c) {
 }
 
 static void one_cia_clock(CIA *c) {
-    bool phi2_a = (c->ta.cr & CRA_INMODE) == 0;   // TA phi2 mode
-    timer_step(&c->ta, false);
+    // Positive CNT transitions feed the CNT input modes; mode 11 gates Timer A
+    // underflows on the CNT level instead. CNT counting is cycle-sampled: a pulse
+    // that completes between two clocks is lost (known conformance limitation).
+    bool cnt_rise = c->cnt && !c->cnt_prev;
+
+    bool pulse_a = (c->ta.cr & CRA_INMODE) != 0 && (c->ta.cr & CR_START) != 0 && cnt_rise;
+    timer_step(&c->ta, pulse_a);
     if (c->ta.undf) {
         c->icr_data |= ICR_TA;
         serial_ta_underflow(c);  // serial output is clocked by Timer A
@@ -292,9 +301,16 @@ static void one_cia_clock(CIA *c) {
             c->ta.feed &= (uint8_t)~P_COUNT0;
         }
     }
-    // Timer B: phi2 mode or cascade (count TA underflows).
-    bool cascade = (c->tb.cr & CRB_INMODE_MASK) == CRB_INMODE_CASCADE;
-    bool pulse_b = cascade && c->ta.undf;
+
+    bool pulse_b = false;
+    switch (c->tb.cr & CRB_INMODE_MASK) {
+        case CRB_INMODE_CNT: pulse_b = (c->tb.cr & CR_START) != 0 && cnt_rise; break;
+        case CRB_INMODE_CASCADE: pulse_b = c->ta.undf; break;
+        case CRB_INMODE_CNT_GATED:
+            pulse_b = (c->tb.cr & CR_START) != 0 && c->ta.undf && c->cnt;
+            break;
+        default: break;  // phi2 mode: the count feed drives it
+    }
     timer_step(&c->tb, pulse_b);
     if (c->tb.undf) {
         c->icr_data |= ICR_TB;
@@ -303,7 +319,9 @@ static void one_cia_clock(CIA *c) {
             c->tb.feed &= (uint8_t)~P_COUNT0;
         }
     }
-    (void)phi2_a;
+
+    c->cnt_prev = c->cnt;  // sample CNT every clock, outside every mode branch
+
     // TOD: phi2 -> 10 Hz tenth tick via a fractional accumulator.
     c->tod.acc += 10u;
     if (c->tod.acc >= CIA_PHI2_HZ) {
@@ -607,6 +625,9 @@ void cia_joy_set(unsigned port, uint8_t low_mask) {
 void cia_restore_set(bool pressed) {
     bus_nmi_set(BUS_NMI_RESTORE, pressed);  // RESTORE is wired to NMI, not the matrix
 }
+void cia_set_cnt(unsigned n, bool level) {
+    cia[n & 1u].cnt = level;
+}
 
 // Advance a CIA's TOD by one tenth directly (the 10 Hz internal tick), for
 // tests that need to reach BCD carries and the 12-hour wrap without running
@@ -634,6 +655,8 @@ void cia_reset(void) {
     cia[1].ta.latch = cia[1].tb.latch = 0xFFFF;
     cia[0].ta.counter = cia[0].tb.counter = 0xFFFF;
     cia[1].ta.counter = cia[1].tb.counter = 0xFFFF;
+    cia[0].cnt = cia[0].cnt_prev = true;  // CNT idles high; equal levels raise no edge
+    cia[1].cnt = cia[1].cnt_prev = true;
     // 6526 reset clears the ICR (mask and flags), so no interrupt is asserted:
     // release this CIA's contribution to the wired-OR IRQ/NMI lines.
     bus_irq_set(BUS_IRQ_CIA1, false);

@@ -40,7 +40,7 @@
 // new version tag without disturbing existing readers.
 static const char SNAP_MAGIC[8] = {'C', '6', '4', 'S', 'N', 'A', 'P', '2'};
 static const char SNAP_END[8] = {'E', 'N', 'D', 'S', 'N', 'A', 'P', '2'};
-#define SNAP_VERSION 3u
+#define SNAP_VERSION 4u
 
 // One static working buffer (no allocation in the machine, per project rules). Sized
 // well above the real total: 64 KB RAM + 2 KB drive RAM + 1 KB colour RAM + a few KB
