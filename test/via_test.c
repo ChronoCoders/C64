@@ -290,6 +290,63 @@ static void test_timer2_pulse_output_pin(void) {
     CHECK_EQ(d5, (uint8_t)(d4 - 1u), "out-5: the next ORB6 high-to-low decrements again");
 }
 
+// Underflow boundary contract: the timer interrupt flag is raised on the 0x0000 ->
+// 0xFFFF underflow, one step after the counter reaches zero, not on 0x0001 -> 0x0000.
+// The flag-clear-at-zero assertion is the pin; the counter values guard against a
+// shift in either direction. The counter is read from the struct field; the flag is
+// read only via the IFR register (R_IFR has no clearing side effect, unlike a T1C-L
+// or T2C-L read). Timed and pulse T2 share one terminal-count rule, checked by arms
+// 2 and 3 landing on the same sequence.
+static void test_timer_underflow_boundary(void) {
+    VIA6522 v;
+
+    via_reset(&v);
+    via_write(&v, R_ACR, 0x00u);
+    via_write(&v, R_T1LL, 0x02u);
+    via_write(&v, R_T1CH, 0x00u);
+    via_step(&v);
+    CHECK_EQ(v.t1c, 1u, "T1 boundary: counter 2 -> 1");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T1, 0, "T1 boundary: flag clear at 1");
+    via_step(&v);
+    CHECK_EQ(v.t1c, 0u, "T1 boundary: counter 1 -> 0");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T1, 0, "T1 boundary: flag still clear at 0");
+    via_step(&v);
+    CHECK_EQ(v.t1c, 0xFFFFu, "T1 boundary: counter 0 -> FFFF");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T1, VIA_IRQ_T1, "T1 boundary: flag set at FFFF underflow");
+
+    via_reset(&v);
+    via_write(&v, R_ACR, 0x00u);
+    via_write(&v, R_T2CL, 0x02u);
+    via_write(&v, R_T2CH, 0x00u);
+    via_step(&v);
+    CHECK_EQ(v.t2c, 1u, "T2 timed boundary: counter 2 -> 1");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, 0, "T2 timed boundary: flag clear at 1");
+    via_step(&v);
+    CHECK_EQ(v.t2c, 0u, "T2 timed boundary: counter 1 -> 0");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, 0, "T2 timed boundary: flag still clear at 0");
+    via_step(&v);
+    CHECK_EQ(v.t2c, 0xFFFFu, "T2 timed boundary: counter 0 -> FFFF");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, VIA_IRQ_T2, "T2 timed boundary: flag set at FFFF underflow");
+
+    via_reset(&v);
+    via_write(&v, R_ACR, ACR_T2_PULSE);
+    via_write(&v, R_T2CL, 0x02u);
+    via_write(&v, R_T2CH, 0x00u);
+    v.pb_in |= PB6;
+    via_step(&v);  // establish PB6 high, no edge
+    v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    CHECK_EQ(v.t2c, 1u, "T2 pulse boundary: counter 2 -> 1 on PB6 falling edge");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, 0, "T2 pulse boundary: flag clear at 1");
+    v.pb_in |= PB6; via_step(&v);
+    v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    CHECK_EQ(v.t2c, 0u, "T2 pulse boundary: counter 1 -> 0 on PB6 falling edge");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, 0, "T2 pulse boundary: flag still clear at 0");
+    v.pb_in |= PB6; via_step(&v);
+    v.pb_in &= (uint8_t)~PB6; via_step(&v);
+    CHECK_EQ(v.t2c, 0xFFFFu, "T2 pulse boundary: counter 0 -> FFFF on PB6 falling edge");
+    CHECK_EQ(via_read(&v, R_IFR) & VIA_IRQ_T2, VIA_IRQ_T2, "T2 pulse boundary: flag set at FFFF underflow");
+}
+
 int main(void) {
     TEST_BEGIN("via");
     test_port_direction_and_read();
@@ -300,6 +357,7 @@ int main(void) {
     test_timer2_one_shot();
     test_timer2_pulse_count();
     test_timer2_pulse_output_pin();
+    test_timer_underflow_boundary();
     test_ca1_edge_interrupt();
     test_cb1_edge_interrupt();
     return TEST_SUMMARY("via");
