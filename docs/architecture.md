@@ -90,6 +90,27 @@ narrow divergence is a known limitation rather than modelled behaviour. CNT also
 clocks the serial shift register on the real chip, and that path is outside this
 implementation.
 
+## Snapshots
+
+`snapshot_save` and `snapshot_load` in `src/snapshot.c` serialize the full machine
+state into a versioned, self-validating format. The API is internal and test-facing:
+the test suite exercises it and future internal code may use it, but it is not exposed
+to the user. There is no key binding and no command-line flag.
+
+Two things keep it internal. The first is scope. A snapshot does not include the live
+disk surface. `drive_snapshot` captures the drive CPU, RAM, VIAs, head position, and
+bit-cell state, but the rotating GCR surface lives in `src/disk.c`, which has no
+snapshot at all. Restoring mid-session would rewind the machine while the surface
+stayed where it had moved to, a combination that never existed on hardware. Capturing
+the surface would be worse, not better: a clean exit writes the surface back to the
+mounted `.d64`, so a restored and then re-saved session would persist the rewound
+surface and silently discard every write made after the snapshot.
+
+The second is intent. The 1541 load time that exposing a snapshot could let a user
+skip is emulated behaviour, not a cost to be worked around. A real drive took that
+long, and its timing is the point of the model; a shortcut past it works against what
+the emulator is for.
+
 ## Diagnostic output
 
 Diagnostic output reports observed or explicitly verified state only. It must not
