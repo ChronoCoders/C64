@@ -143,10 +143,10 @@ static void test_parser_gaps(void) {
     remove(baseline);
 }
 
-// passed is a plain decimal that must fit unsigned long. strtoul saturates an
-// out-of-range value to ULONG_MAX and sets errno; the parser reads neither, so a
-// too-large decimal is currently accepted as ULONG_MAX. Values are built at runtime
-// so no width-dependent literal is baked in.
+// passed is a plain decimal that must fit unsigned long. The parser clears errno before
+// strtoul and rejects an out-of-range value (ERANGE) as a bad passed rather than
+// accepting the saturated ULONG_MAX. Values are built at runtime so no width-dependent
+// literal is baked in.
 static void test_passed_range(void) {
     char max_val[64];
     char overflow_val[80];

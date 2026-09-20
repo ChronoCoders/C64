@@ -147,14 +147,12 @@ static void test_missing_file_rejected(void) {
              "missing file -> SNAP_ERR_IO");
 }
 
-// C64-001 control: a rejected snapshot_load must not mutate live machine state.
-// snapshot.h promises "On any error nothing partial is left running", but snapshot.c
-// restores subsystem blocks sequentially in place and returns on the first bad block.
-// A snapshot truncated at the DRIVE payload (the last block) therefore restores every
-// earlier block (MEM..IEC) toward the snapshot state before the failure is detected
-// (mode A), and drive_restore zeroes DRIVE's own fields via snap_read underflow (mode
-// B). This measures the state-preservation invariant directly and is expected to FAIL
-// against the current implementation. It is the failing control for the follow-up fix.
+// C64-001 control: a rejected snapshot_load must not mutate live machine state, as
+// snapshot.h promises ("On any error nothing partial is left running"). snapshot_load
+// preflights every block over its validated slice before committing any, so a snapshot
+// truncated at the DRIVE payload (the last block) is rejected before MEM..IEC or DRIVE
+// is restored. This measures the state-preservation invariant directly: every measured
+// field must read back its pre-call value.
 typedef struct {
     uint8_t mem0, mem1;        // MEM  block 1
     uint16_t pc;               // CPU  block 2
@@ -254,8 +252,7 @@ static void test_failed_load_preserves_prior_state(void) {
     CHECK_EQ(r, SNAP_ERR_TRUNCATED, "C64-001: truncated-at-DRIVE snapshot is rejected");
 
     // The protected invariant: every measured field must still equal its pre-call (A)
-    // value. On the current implementation these fail: MEM..VIC read back the snapshot
-    // value (mode A) and DRIVE reads back zero (mode B).
+    // value, since the load is rejected in preflight before any block is committed.
     Fingerprint fpP; capture(&fpP);
     CHECK_EQ(fpP.mem0, fpA.mem0, "C64-001 invariant: MEM $0400 unchanged after a rejected load");
     CHECK_EQ(fpP.mem1, fpA.mem1, "C64-001 invariant: MEM $2000 unchanged after a rejected load");
@@ -275,13 +272,10 @@ static void test_failed_load_preserves_prior_state(void) {
 }
 
 // C64-002 control: a failed snapshot_save must not destroy the file already at path.
-// snapshot_save opens the destination with fopen(path, "wb"), truncating it before the
-// write, so a fwrite/fclose failure leaves the previously valid snapshot gone. The D64
-// writeback path (disk.c) avoids this by writing a sibling temp then atomically
-// replacing. Injection: RLIMIT_FSIZE=0 lets fopen(wb) truncate the file but makes the
-// write fail (EFBIG); the failure landing after the open is shown by the destination
-// being truncated to 0. Expected RED on the byte-identity assertion until the save is
-// made atomic.
+// snapshot_save writes a sibling temp, flushes and syncs it, then atomically replaces
+// the destination, so any failure before the replace leaves the existing file intact.
+// Injection: RLIMIT_FSIZE=0 makes the temp write fail (EFBIG) after fopen; the existing
+// file must read back byte-for-byte unchanged.
 static uint64_t fnv1a(const uint8_t *b, long n) {
     uint64_t h = 1469598103934665603ULL;
     for (long i = 0; i < n; i++) {

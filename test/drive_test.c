@@ -833,12 +833,11 @@ static void test_mount_rejects_overlong_path(void) {
 }
 
 // A writeback that cannot complete must leave the on-disk original byte-identical.
-// The failure is forced by occupying the temp target (mount_path + ".tmp") with a
-// directory, so the temp file cannot be opened. The pre-fix code truncated
-// mount_path directly and wrote over the original, so the byte-identical check
-// below failed against it; the temp-and-rename design leaves the original untouched.
-// The post-open branches (short write, flush/sync/close/rename failure) are not
-// forced here: none can be triggered portably without root or a test seam.
+// The failure is forced by occupying the sibling temp target (mount_path + ".tmp")
+// with a directory, so the temp file cannot be opened and the destination is never
+// touched. The post-open branches (short write, flush/sync/close/rename failure) are
+// not forced here: none can be triggered portably without elevated privileges or a
+// test seam.
 static void test_writeback_preserves_original_on_failure(void) {
     const char *path = "build/wb_fail.d64";
     const char *tmp = "build/wb_fail.d64.tmp";
@@ -883,12 +882,11 @@ static void test_writeback_preserves_original_on_failure(void) {
 }
 
 // C64-004 control: a mount call that fails validation must not eject the disk already
-// mounted. disk_mount / disk_mount_image call disk_unmount as their first action, then
-// validate, so a rejected replacement leaves the drive empty. The control mounts a
-// distinctive D1, attempts a bad-length disk_mount_image (validated after the unmount),
-// and asserts D1 is still present and reads back unchanged. Fully in-memory, so it needs
-// no filesystem and no platform guard. Expected RED on the mounted-state assertion until
-// the mount entry points validate before unmounting.
+// mounted. disk_mount / disk_mount_image stage the candidate and validate it before
+// committing, so a rejected replacement leaves the mounted disk in place. The control
+// mounts a distinctive D1, attempts a bad-length disk_mount_image, and asserts D1 is
+// still present and reads back unchanged. Fully in-memory, so it needs no filesystem
+// and no platform guard.
 static void test_failed_remount_keeps_prior_disk(void) {
     static uint8_t d1[D64_STD_SIZE], d2[D64_STD_SIZE];
     memset(d1, 0xA1u, sizeof d1);
@@ -909,8 +907,8 @@ static void test_failed_remount_keeps_prior_disk(void) {
     CHECK(disk_mount_image(d1, sizeof d1), "C64-004 fixture: D1 re-mounts");
     CHECK(disk_read_sector(1u, 0u, r1), "C64-004 fixture: R1 re-read from D1");
 
-    // A bad length is rejected only after disk_unmount has already run (disk.c
-    // disk_mount_image: unmount at line 2, length check at line 3).
+    // A bad length is rejected up front, before the staged candidate is committed
+    // (disk_mount_image checks the length before mount_prepare/mount_commit).
     uint8_t bad[16];
     memset(bad, 0xFFu, sizeof bad);
     CHECK(!disk_mount_image(bad, sizeof bad), "C64-004: a bad-length replacement mount returns false");
@@ -924,18 +922,16 @@ static void test_failed_remount_keeps_prior_disk(void) {
     disk_unmount();
 }
 
-// C64-004 control, disk_mount path. disk_mount also unmounts first (disk.c:211) then
-// validates, so a rejected replacement ejects the mounted disk. Two arms:
-//   A: a missing path fails at disk.c:217 (fopen), after the unmount.
-//   B: an oversized file whose candidate read at disk.c:219 writes D64_STD_SIZE bytes
-//      into the authoritative image buffer, then disk.c:224 rejects the error-info
-//      block size, after the unmount.
+// C64-004 control, disk_mount path. disk_mount reads the candidate into a staging
+// buffer and validates it before committing, so a rejected replacement leaves the
+// mounted disk in place. Two arms:
+//   A: a missing path fails at fopen, before any commit.
+//   B: an oversized file is read into the staging buffer and then rejected on its
+//      size, so the authoritative image is never touched.
 // Observation covers the publicly reachable state: mounted (disk_present), the track
 // GCR bit count (disk_track_gcr), and decoded sector content (disk_read_sector). The
-// raw image buffer, clean_path, mount_path, disk_id and error_info have no public
-// getter, so arm B's image corruption is documented from source but not asserted.
-// Expected RED on the mounted-state assertions until the entry points validate before
-// unmounting and stop reading into the authoritative buffer.
+// staging buffer, clean_path, mount_path, disk_id and error_info have no public getter,
+// so arm B's staged read is documented from source but not asserted.
 static void test_failed_path_mount_keeps_prior_disk(void) {
     static uint8_t d1[D64_STD_SIZE], d2[D64_STD_SIZE];
     memset(d1, 0xA1u, sizeof d1);

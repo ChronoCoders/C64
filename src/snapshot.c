@@ -114,9 +114,10 @@ static void put_block(SnapOut *o, uint8_t tag, void (*fn)(SnapOut *)) {
 }
 
 // Bytes a subsystem's block occupies, derived from its own serializer: a
-// zero-capacity cursor writes nothing but still counts the field lengths. save and
-// restore share one field set, so this is the exact length the restore will consume,
-// which pass 1 checks before pass 2 commits.
+// zero-capacity cursor writes nothing but still counts the field lengths. This is the
+// serializer's output length; pass 1 checks each declared block length against it, and
+// the preflight separately checks that each restore consumes its slice exactly before
+// pass 2 commits.
 static size_t block_size(void (*save)(SnapOut *)) {
     SnapOut o = {NULL, 0, 0, false};
     save(&o);
