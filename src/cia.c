@@ -305,7 +305,7 @@ static void one_cia_clock(CIA *c) {
     bool pulse_b = false;
     switch (c->tb.cr & CRB_INMODE_MASK) {
         case CRB_INMODE_CNT: pulse_b = (c->tb.cr & CR_START) != 0 && cnt_rise; break;
-        case CRB_INMODE_CASCADE: pulse_b = c->ta.undf; break;
+        case CRB_INMODE_CASCADE: pulse_b = (c->tb.cr & CR_START) != 0 && c->ta.undf; break;
         case CRB_INMODE_CNT_GATED:
             pulse_b = (c->tb.cr & CR_START) != 0 && c->ta.undf && c->cnt;
             break;

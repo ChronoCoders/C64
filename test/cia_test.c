@@ -609,6 +609,59 @@ static void test_cnt_stopped_source(void) {
     CHECK_EQ(cia_timer_b(0), tb_start, "stopped source: CRB=11 with START clear does not count a Timer A underflow");
 }
 
+// Measures what the implementation does when a Timer A underflow reaches Timer B
+// in cascade mode while Timer B is stopped. Pins current behaviour only; whether a
+// stopped timer should count is the hardware-contract question, deferred. Timer B is
+// stopped via a CR write (not a one-shot underflow, which would add its own event).
+// Samples the TB counter every clock: the count pipeline is four stages, so a pulse
+// reaches the decrement three clocks after injection.
+static int cascade_arm(int start_tb, int fire_ta, uint16_t tb_seq[8]) {
+    cia_init();
+    cia1_write(TBLO, 0xFF);
+    cia1_write(TBHI, 0x00);
+    cia1_write(CRB, start_tb ? 0x51u : 0x50u);  // cascade + force-load (+ start)
+    cia_clock();
+    cia_clock();
+    if (fire_ta) {
+        cia1_write(TALO, 0x02);
+        cia1_write(TAHI, 0x00);
+        cia1_write(CRA, 0x19u);  // Timer A one-shot + force-load + start
+    }
+    int undf_clk = -1;
+    uint16_t prev_ta = cia_timer_a(0);
+    for (int c = 0; c < 8; c++) {
+        cia_clock();
+        uint16_t ta = cia_timer_a(0);
+        if (ta > prev_ta && undf_clk < 0) { undf_clk = c; }
+        prev_ta = ta;
+        tb_seq[c] = cia_timer_b(0);
+    }
+    return undf_clk;
+}
+
+static int first_decrement(const uint16_t tb_seq[8], uint16_t start) {
+    for (int c = 0; c < 8; c++) {
+        if (tb_seq[c] != start) { return c; }
+    }
+    return -1;
+}
+
+static void test_cascade_stopped_timer_b(void) {
+    uint16_t tb1[8], tb2[8], tb3[8];
+    int u1 = cascade_arm(0, 1, tb1);  // stopped, TA underflow
+    int u2 = cascade_arm(1, 1, tb2);  // started, TA underflow (positive control)
+    int u3 = cascade_arm(0, 0, tb3);  // stopped, no TA underflow (negative control)
+    int d1 = first_decrement(tb1, 0xFFu);
+    int d2 = first_decrement(tb2, 0xFFu);
+
+    CHECK_EQ(tb2[7], 0xFEu, "cascade positive control: started TB counts the underflow (255->254)");
+    CHECK(u2 >= 0 && d2 >= 0 && d2 - u2 == 3, "cascade positive control: TB decrements 3 clocks after the TA underflow");
+    CHECK_EQ(tb3[7], 0xFFu, "cascade negative control: no TA underflow, TB does not move");
+    CHECK_EQ(u3, -1, "cascade negative control: no TA underflow observed");
+    CHECK(u1 >= 0, "arm1: a real Timer A underflow occurred with Timer B stopped");
+    CHECK_EQ(d1, -1, "stopped TB in cascade must not count a Timer A underflow across the drain window");
+}
+
 int main(void) {
     TEST_BEGIN("cia");
     test_timer_a_phi2_pattern();
@@ -636,5 +689,6 @@ int main(void) {
     test_cnt_ctrl_f_reset_default();
     test_cnt_prev_updated_every_clock();
     test_cnt_stopped_source();
+    test_cascade_stopped_timer_b();
     return TEST_SUMMARY("cia");
 }
