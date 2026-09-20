@@ -2,6 +2,8 @@
 // parser integrity, baseline integrity, and semantic comparison. These exercise the
 // same parser and decision the gate binary uses, so a fixture that passes here pins the
 // behavior the gate ships.
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include "test.h"
@@ -141,11 +143,43 @@ static void test_parser_gaps(void) {
     remove(baseline);
 }
 
+// passed is a plain decimal that must fit unsigned long. strtoul saturates an
+// out-of-range value to ULONG_MAX and sets errno; the parser reads neither, so a
+// too-large decimal is currently accepted as ULONG_MAX. Values are built at runtime
+// so no width-dependent literal is baked in.
+static void test_passed_range(void) {
+    char max_val[64];
+    char overflow_val[80];
+    snprintf(max_val, sizeof max_val, "%lu", ULONG_MAX);
+    snprintf(overflow_val, sizeof overflow_val, "%s0", max_val);
+
+    char line_max[160];
+    char line_over[160];
+    snprintf(line_max, sizeof line_max,
+             "LORENZ_RESULT passed=%s last=A stop_reason=JAM stop_test=B\n", max_val);
+    snprintf(line_over, sizeof line_over,
+             "LORENZ_RESULT passed=%s last=A stop_reason=JAM stop_test=B\n", overflow_val);
+
+    LgResult r;
+    memset(&r, 0, sizeof r);
+    CHECK_EQ(lg_parse(line_max, &r), LG_PARSE_OK, "passed=ULONG_MAX parses OK (exact maximum)");
+    CHECK_EQ(r.passed, ULONG_MAX, "passed=ULONG_MAX yields ULONG_MAX");
+
+    memset(&r, 0, sizeof r);
+    CHECK_EQ(lg_parse(line_over, &r), LG_PARSE_BAD_PASSED, "an out-of-range passed value is rejected");
+
+    memset(&r, 0, sizeof r);
+    errno = ERANGE;
+    CHECK_EQ(lg_parse(line_max, &r), LG_PARSE_OK, "passed=ULONG_MAX parses OK with errno pre-set to ERANGE");
+    CHECK_EQ(r.passed, ULONG_MAX, "passed=ULONG_MAX yields ULONG_MAX with a stale errno");
+}
+
 int main(void) {
     TEST_BEGIN("lorenz_gate");
     test_parser_integrity();
     test_baseline_integrity();
     test_semantic();
     test_parser_gaps();
+    test_passed_range();
     return TEST_SUMMARY("lorenz_gate");
 }

@@ -6,6 +6,7 @@
 #ifndef LORENZ_GATE_H
 #define LORENZ_GATE_H
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,7 +88,9 @@ static LgParse lg_parse_line(const char *line, LgResult *out) {
                 if (*d < '0' || *d > '9') { return LG_PARSE_BAD_PASSED; }  // plain decimal only
             }
             char *end = NULL;
+            errno = 0;
             passed = strtoul(val, &end, 10);
+            if (errno == ERANGE) { return LG_PARSE_BAD_PASSED; }  // out of range for unsigned long
             if (end == val || *end != '\0') { return LG_PARSE_BAD_PASSED; }
         } else {
             if (strlen(val) + 1u > LG_ID_CAP) { return LG_PARSE_MALFORMED; }
