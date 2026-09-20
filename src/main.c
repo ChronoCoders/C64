@@ -20,8 +20,7 @@
 // ROMs, and runs frames continuously, presenting each rendered frame. With
 // --headless it runs the same machine without a display and reports where the
 // CPU settles (useful where no display is available). The full machine (CPU,
-// VIC, SID, both CIAs, and the 1541 drive when its ROM is present) runs; the
-// KERNAL boots to the READY prompt and idles in the keyboard-input loop.
+// VIC, SID, both CIAs, and the 1541 drive when its ROM is present) runs.
 
 #define KERNAL_PATH "rom/kernal.rom"
 #define BASIC_PATH "rom/basic.rom"
@@ -144,8 +143,6 @@ static int run_headless(void) {
     printf("  PC per frame    $%04X-$%04X, final $%04X\n", lo, hi, cpu.pc);
     printf("  border/bg       $D020=%u $D021=%u\n", vic_read(0xD020) & 0x0F,
            vic_read(0xD021) & 0x0F);
-    printf("  note            KERNAL booted to READY and idles in the keyboard "
-           "scan; the full machine (both CIAs, the 1541 drive) is present.\n");
     if (disk_writeback()) {
         printf("1541: wrote the disk image back to its file.\n");
     }

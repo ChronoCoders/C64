@@ -89,3 +89,11 @@ low to high and back, is not seen, where the real 6526 latches the transition; t
 narrow divergence is a known limitation rather than modelled behaviour. CNT also
 clocks the serial shift register on the real chip, and that path is outside this
 implementation.
+
+## Diagnostic output
+
+Diagnostic output reports observed or explicitly verified state only. It must not
+present inferred machine state, subsystem presence, or boot milestones as measured
+facts. A line that names a value read from the machine is sound; a line that asserts
+where the CPU settled or which subsystems are attached, without a predicate that
+checked it, is not, and belongs wherever that fact is actually determined.
