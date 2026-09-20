@@ -92,8 +92,8 @@ implementation.
 
 ## Snapshots
 
-`snapshot_save` and `snapshot_load` in `src/snapshot.c` serialize the full machine
-state into a versioned, self-validating format. The API is internal and test-facing:
+`snapshot_save` and `snapshot_load` in `src/snapshot.c` serialize the C64 and 1541
+execution state into a versioned, self-validating format. The API is internal and test-facing:
 the test suite exercises it and future internal code may use it, but it is not exposed
 to the user. There is no key binding and no command-line flag.
 
