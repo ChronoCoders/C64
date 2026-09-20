@@ -4,6 +4,7 @@
 
 #include "snapshot.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -64,6 +65,7 @@ struct SnapIn {
     size_t pos;
     size_t len;
     bool underflow;
+    bool dry_run;  // preflight cursor: advance and latch underflow, but write nothing
 };
 
 void snap_write(SnapOut *o, const void *src, size_t n) {
@@ -77,10 +79,10 @@ void snap_write(SnapOut *o, const void *src, size_t n) {
 
 void snap_read(SnapIn *i, void *dst, size_t n) {
     if (i->pos + n <= i->len) {
-        memcpy(dst, i->base + i->pos, n);
+        if (!i->dry_run) { memcpy(dst, i->base + i->pos, n); }
         i->pos += n;
     } else {
-        memset(dst, 0, n);
+        if (!i->dry_run) { memset(dst, 0, n); }
         i->underflow = true;
     }
 }
@@ -216,7 +218,7 @@ SnapResult snapshot_load(const char *path) {
     // machine state, recording a bounded slice per block. Any malformed input is
     // rejected here, before pass 2 touches the machine, so a rejected load leaves the
     // machine exactly as it was (snapshot.h contract: nothing partial left running).
-    SnapIn i = {snap_buf, 0, n, false};
+    SnapIn i = {snap_buf, 0, n, false, false};
     char magic[8];
     uint32_t ver = 0;
     snap_read(&i, magic, sizeof magic);
@@ -275,12 +277,29 @@ SnapResult snapshot_load(const char *path) {
         return SNAP_ERR_LAYOUT;  // trailing bytes: not the file we think it is
     }
 
-    // Pass 2: commit from the validated descriptors only. No structural parsing
-    // remains here, so no decision past this point depends on input shape; each
-    // restore reads exactly its validated slice and cannot underflow.
+    // Preflight: dry-run each restore over its validated slice before any commit.
+    // Pass 1 checked only the declared length against the serialiser's output;
+    // this checks what the restore actually consumes. Both conditions are needed:
+    // an over-read latches underflow with pos == len, an under-consume leaves
+    // pos != len with underflow clear. A dry-run cursor advances and latches
+    // underflow exactly as a real read but writes nothing, so no machine state is
+    // mutated if any block is rejected (the C64-001 unchanged-on-failure invariant).
+    // SIDE-EFFECT INVARIANT: a restore callback must mutate authoritative state only
+    // through snap_read destinations, or a dry run would not observe its full effect.
     for (size_t b = 0; b < nblocks; b++) {
-        SnapIn bi = {desc[b].base, 0, desc[b].len, false};
+        SnapIn check = {desc[b].base, 0, desc[b].len, false, true};
+        blocks[b].restore(&check);
+        if (check.underflow || check.pos != check.len) {
+            return SNAP_ERR_LAYOUT;
+        }
+    }
+
+    // Pass 2: commit from the validated descriptors only. Preflight has confirmed
+    // every restore consumes its slice exactly, so no restore underflows here.
+    for (size_t b = 0; b < nblocks; b++) {
+        SnapIn bi = {desc[b].base, 0, desc[b].len, false, false};
         blocks[b].restore(&bi);
+        assert(!bi.underflow && bi.pos == bi.len);
     }
 
     // Derived state that is not serialized: rebuild the memory banking from the
