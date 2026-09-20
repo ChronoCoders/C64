@@ -1,7 +1,3 @@
-#ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#endif
-
 #include "snapshot.h"
 
 #include <assert.h>
@@ -10,18 +6,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <io.h>
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
 #include "bus.h"
 #include "cia.h"
 #include "cpu.h"
 #include "drive.h"
+#include "fileio.h"
 #include "iec.h"
 #include "mem.h"
 #include "sid.h"
@@ -124,41 +113,6 @@ static size_t block_size(void (*save)(SnapOut *)) {
     return o.len;
 }
 
-// Durable temp-then-replace, mirroring the D64 writeback path in disk.c. Duplicated
-// rather than shared because disk.c's helpers are static and its POSIX replace sizes
-// its directory buffer from that module's mount_path; a shared helper is a follow-up.
-#ifdef _WIN32
-static int snap_sync(FILE *f) { return _commit(_fileno(f)); }
-static bool snap_replace(const char *tmp, const char *dst) {
-    return MoveFileExA(tmp, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-}
-#else
-static int snap_sync(FILE *f) { return fsync(fileno(f)); }
-static bool snap_replace(const char *tmp, const char *dst) {
-    if (rename(tmp, dst) != 0) {  // atomically replaces the destination on the same volume
-        return false;
-    }
-    // The rename is durable only once the parent directory entry is synced.
-    char dir[SNAP_PATH_CAP];
-    const char *slash = strrchr(dst, '/');
-    if (slash == NULL) {
-        dir[0] = '.'; dir[1] = '\0';
-    } else if (slash == dst) {
-        dir[0] = '/'; dir[1] = '\0';
-    } else {
-        size_t dl = (size_t)(slash - dst);
-        memcpy(dir, dst, dl);
-        dir[dl] = '\0';
-    }
-    int dfd = open(dir, O_RDONLY);
-    if (dfd >= 0) {
-        fsync(dfd);
-        close(dfd);
-    }
-    return true;
-}
-#endif
-
 bool snapshot_save(const char *path) {
     SnapOut o = {snap_buf, 0, sizeof snap_buf, false};
     snap_write(&o, SNAP_MAGIC, sizeof SNAP_MAGIC);
@@ -192,11 +146,11 @@ bool snapshot_save(const char *path) {
         return false;
     }
     bool ok = (fwrite(snap_buf, 1, o.len, f) == o.len) && (fflush(f) == 0) &&
-              (snap_sync(f) == 0);
+              (file_sync(f) == 0);
     if (fclose(f) != 0) {
         ok = false;
     }
-    if (ok && snap_replace(tmp_path, path)) {
+    if (ok && file_replace(tmp_path, path)) {
         return true;
     }
     remove(tmp_path);

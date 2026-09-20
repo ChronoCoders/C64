@@ -33,7 +33,7 @@ BIN = build/c64
 
 # Core objects without main.c or host.c (no SDL), shared by the test runner. The
 # drive is included so the drive suite links; the Lorenz runner does not call it.
-CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c
+CORE_SRC = src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c src/fileio.c
 # Every src header, a prerequisite of each rule that compiles src/*.c. The recipes
 # are single-shot, so a header edit rebuilds the whole artifact rather than leaving
 # it stale. test/test.h stays a separate explicit prerequisite of the test rules.
