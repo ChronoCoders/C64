@@ -46,6 +46,20 @@ ctest --test-dir build -L slow            # DOS/serial integration group
 ./build/c64 --disk games/some.d64         # run
 ```
 
+### WSLg
+
+Under WSLg the default SDL renderer is software GL (Mesa llvmpipe) even though it
+reports as accelerated OpenGL, so its present cost is higher. Select SDL's software
+renderer there for lower present cost and clean audio:
+
+```sh
+SDL_RENDER_DRIVER=software ./build/c64 --disk games/some.d64
+```
+
+The binary creates the renderer with index -1, so `SDL_RENDER_DRIVER` chooses it. On a
+host with a real GPU, leave the default alone; the accelerated renderer is genuinely
+faster.
+
 ## Windows, MSYS2 / MinGW64 (verified)
 
 From an MSYS2 MinGW64 shell:
