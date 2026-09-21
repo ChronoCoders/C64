@@ -76,6 +76,15 @@ one simplified reset.
   particular drive's entry angle, so a loader that reads by raw rotational position
   and relies on that angle can be sensitive (see [disk-drive.md](disk-drive.md)).
 
+## VIA (src/via.c)
+
+- The 6522 shift register is stored and read back but never clocked. `via_step`
+  advances only Timer 1 and Timer 2. Nothing shifts, CB1 and CB2 carry no serial
+  clock, the ACR shift-mode bits are not decoded, and the SR interrupt flag is only
+  cleared on access, never raised by a completed shift. Software driving the VIA in a
+  shift mode will not see the serial behaviour, and the register reads back as a plain
+  byte.
+
 ## Snapshots (src/snapshot.c)
 
 - Snapshot payloads are raw struct images, in host byte order and this compiler's
