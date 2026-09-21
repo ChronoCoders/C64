@@ -1,4 +1,5 @@
 build/
+build-cmake/
 rom/*.rom
 test/lorenz/
 games/
