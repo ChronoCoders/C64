@@ -65,6 +65,27 @@ static int window_scale = HOST_SCALE_DEFAULT;
 static const char AUTORUN_SEQ[] = "LOAD\"*\",8,1\rRUN\r";
 static bool autorun_enabled;
 
+// The mounted image's path, kept for the write-back message. main.c only ever
+// file-mounts (disk_mount), so a mounted disk always has this path.
+static const char *disk_path;
+
+// Persist the mounted image on a clean exit. A false return with a disk mounted is a
+// write failure, not the empty no-disk case: report it on stderr and exit non-zero.
+// With no disk mounted, false is the ordinary state and stays silent.
+static int writeback_on_exit(void) {
+    if (disk_writeback()) {
+        printf("1541: wrote the disk image back to its file.\n");
+        return 0;
+    }
+    if (disk_present()) {
+        fprintf(stderr,
+                "1541: could not write the disk image back to %s; the file on disk is "
+                "unchanged.\n", disk_path);
+        return 1;
+    }
+    return 0;
+}
+
 static int run_visible(void) {
     if (!host_init(vic_fb_width(), vic_fb_height(), window_scale, WINDOW_TITLE)) {
         printf("C64: could not open a display window (%s). Is a display "
@@ -120,10 +141,7 @@ static int run_visible(void) {
     }
     host_audio_shutdown();
     host_shutdown();
-    if (disk_writeback()) {  // persist a SAVE back to the .d64 on a clean exit
-        printf("1541: wrote the disk image back to its file.\n");
-    }
-    return 0;
+    return writeback_on_exit();
 }
 
 static int run_headless(void) {
@@ -143,10 +161,7 @@ static int run_headless(void) {
     printf("  PC per frame    $%04X-$%04X, final $%04X\n", lo, hi, cpu.pc);
     printf("  border/bg       $D020=%u $D021=%u\n", vic_read(0xD020) & 0x0F,
            vic_read(0xD021) & 0x0F);
-    if (disk_writeback()) {
-        printf("1541: wrote the disk image back to its file.\n");
-    }
-    return 0;
+    return writeback_on_exit();
 }
 
 int main(int argc, char **argv) {
@@ -192,6 +207,7 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
             const char *path = argv[++i];
             if (disk_mount(path)) {
+                disk_path = path;
                 printf("1541: mounted %s (read/write; a SAVE reaches the file "
                        "only on a clean exit).\n", path);
             } else {
