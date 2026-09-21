@@ -38,7 +38,8 @@ endif()
 # test. This is the portable heart; only the pieces below touch a platform.
 set(CORE_SOURCES
   src/bus.c src/mem.c src/cpu.c src/cpu6502.c src/vic.c src/sid.c
-  src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c)
+  src/cia.c src/drive.c src/via.c src/iec.c src/disk.c src/debug.c src/snapshot.c
+  src/fileio.c)
 
 add_library(c64core STATIC ${CORE_SOURCES})
 target_include_directories(c64core PUBLIC src)

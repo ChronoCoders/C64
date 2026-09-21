@@ -253,7 +253,7 @@ fuzz:
 	@mkdir -p build/fuzz-corpus
 	@head -c 174848 /dev/zero > build/fuzz-corpus/blank.d64
 	clang $(CSTD) $(WARN) -g -O1 -fsanitize=fuzzer,address,undefined \
-	  -Isrc test/fuzz_d64.c src/disk.c -o build/fuzz-d64
+	  -Isrc test/fuzz_d64.c src/disk.c src/fileio.c -o build/fuzz-d64
 	./build/fuzz-d64 -max_total_time=$(FUZZ_TIME) -print_final_stats=1 build/fuzz-corpus
 
 clean:
